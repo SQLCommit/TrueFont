@@ -308,23 +308,41 @@ inline bool samples(const LiveLeaf& l, uintptr_t rec, const char* name16, uintpt
     }
     return true;
 }
-// The unique rects of the kept leaves that sample a record (or its copy, `alias`).
-inline std::vector<Rect> rectsOf(const RegistryScan& s, uintptr_t rec, const char* name16, uintptr_t alias = 0) {
-    std::vector<Rect> out;
-    for (const LiveLeaf& l : s.kept) if (samples(l, rec, name16, alias)) out.push_back(l.r);
-    std::sort(out.begin(), out.end());
-    out.erase(std::unique(out.begin(), out.end()), out.end());
+// The unique rects of the kept leaves that sample a record (or its copy, `alias`), in the table's units: divided by the
+// record's sheet scale. A rect that does not divide is off the sheet's grid: it goes to `offGrid` (as the leaf has it),
+// never into the set.
+inline std::vector<Rect> rectsOf(const RegistryScan& s, uintptr_t rec, const char* name16, uintptr_t alias = 0, int scale = 1, std::vector<Rect>* offGrid = nullptr) {
+    std::vector<Rect> out, off;
+    for (const LiveLeaf& l : s.kept) {
+        if (!samples(l, rec, name16, alias)) continue;
+        bool exact = false;
+        const Rect r = scaledDown(l.r, scale, exact);
+        if (exact) out.push_back(r);
+        else off.push_back(l.r);
+    }
+    for (std::vector<Rect>* v : {&out, &off}) {
+        std::sort(v->begin(), v->end());
+        v->erase(std::unique(v->begin(), v->end()), v->end());
+    }
+    if (offGrid) *offGrid = std::move(off);
     return out;
 }
+// The set (resource name) of the first kept leaf that samples a record (or its copy) with `r` as the leaf has it; empty
+// when none does.
+inline std::string setSampling(const RegistryScan& s, const Rect& r, uintptr_t rec, const char* name16, uintptr_t alias = 0) {
+    for (const LiveLeaf& l : s.kept)
+        if (l.r == r && samples(l, rec, name16, alias)) return std::string(l.res);
+    return std::string();
+}
 
-// Rect-set equality misses reordered characters. Verify fontshp/dmgnum rects by composite against 51.DAT.
-// Missing or shorter sets are allowed. first describes the first mismatch.
+// Rect-set equality misses reordered characters. Verify fontshp/dmgnum rects by composite against 51.DAT, divided by the
+// record's sheet scale. Missing or shorter sets are allowed. first describes the first mismatch.
 struct CodeMapCheck {
     int leaves = 0, mismatches = 0;
     std::string first;
     bool ok() const { return mismatches == 0; }
 };
-inline CodeMapCheck checkCodeMap(const RegistryScan& s, uintptr_t rec, const char* name16, uintptr_t alias = 0, TableSet ts = TableSet::English) {
+inline CodeMapCheck checkCodeMap(const RegistryScan& s, uintptr_t rec, const char* name16, uintptr_t alias = 0, TableSet ts = TableSet::English, int scale = 1) {
     CodeMapCheck c;
     const RecordTable ff = tableFor(SpriteRec::FontFont, ts);
     const auto ownedRect = [&](const Rect& r) {
@@ -337,13 +355,15 @@ inline CodeMapCheck checkCodeMap(const RegistryScan& s, uintptr_t rec, const cha
         if ((!fontshp && !dmgnum) || !samples(l, rec, name16, alias)) continue;
         ++c.leaves;
         const CodeTable t = fontshp ? codesFontshp() : codesDmgnum();
+        bool exact = false;
+        const Rect r = scaledDown(l.r, scale, exact);
         bool atComp = false, match = false;
         for (size_t i = 0; i < t.n; i++) {
             if (t.e[i].comp != l.comp) continue;
             atComp = true;
-            match = match || t.e[i].r == l.r;
+            match = match || (exact && t.e[i].r == r);
         }
-        if (match || (!atComp && !ownedRect(l.r))) continue;
+        if (match || (exact && !atComp && !ownedRect(r))) continue;
         if (!c.mismatches++) {
             char b[200];
             _snprintf_s(b, sizeof b, _TRUNCATE, "%s code %02Xh (composite %d) samples (%d,%d %dx%d), which is not the rect that code has in the tables", fontshp ? "fontshp" : "dmgnum",

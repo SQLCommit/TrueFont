@@ -218,7 +218,7 @@ The sidebar shows the client language, active font groups, build progress and me
 <dl>
 <dd>
 
-**XiView** and **Pivot** font overlays work when they preserve the game's layout. Icons, logos and disabled groups keep the mod's art; unrecognized layouts are left unchanged. After changing a mod during play, run `/tfont on` to check its textures again. HorizonXI's font layout is recognized, but compatibility has not yet been confirmed in play.
+**XiView** and **Pivot** font overlays work when they preserve the game's layout. XiView's high-resolution letter sheets (the game's layout at 2x or 4x) are recognised; its 512 sheet is confirmed in play. Icons, logos and disabled groups keep the mod's art; unrecognized layouts are left unchanged. After changing a mod during play, run `/tfont on` to check its textures again. HorizonXI's font layout is recognized, but compatibility has not yet been confirmed in play.
 
 | Client language | Support |
 | :--- | :--- |

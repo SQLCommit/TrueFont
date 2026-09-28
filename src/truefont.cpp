@@ -37,7 +37,7 @@
 
 namespace {
 
-constexpr double kVersion = 1.0;
+constexpr double kVersion = 1.1;
 constexpr const char* kName = "truefont";
 
 IAshitaCore* core = nullptr;
@@ -1496,9 +1496,10 @@ tf::PanelView panelView() {
             const auto st = sprites ? sprites->groupState(tf::Group(g)) : tf::SpriteInstaller::GroupState::Unavailable;
             v.groups[g].available = st != tf::SpriteInstaller::GroupState::Unavailable;
             v.groups[g].replaced = sprites && sprites->groupArtReplaced(tf::Group(g));   // a record re-created since load holds other art
+            v.groups[g].modLayout = sprites && sprites->groupLayoutUnknown(tf::Group(g));   // a font mod's letter layout it does not recognise
             v.groups[g].failed = st == tf::SpriteInstaller::GroupState::Failed;   // could not be built or put in place
             v.groups[g].restart = sprites && sprites->groupNeedsRestart(tf::Group(g));
-            v.groups[g].unknownClient = sprites ? 0 : unknown;
+            v.groups[g].unknownClient = tf::spriteGroupUnknownClient(sprites != nullptr, v.groups[g].modLayout, unknown);
             if (sprites && sprites->languageRefused()) v.groups[g].language = tf::clientLangName(sprites->clientLang());
             // The nameplate page read resolves independently from sprite fonts.
             if (sprites && g == int(tf::Group::Nameplates) && !sprites->plateReport().available) v.groups[g].unknownClient = unknown;

@@ -1,4 +1,5 @@
-// Build sprite-font composites at k times the native dimensions, preserving normalized UVs.
+// Build sprite-font composites at k times the table's dimensions, preserving normalized UVs. The readback may be a scaled
+// sheet (s = 2 or 4 times the table): every read of it is in its own texels (s per table texel), and k is a multiple of s.
 // Workers use copied inputs; unowned or unsupported glyphs retain the native readback.
 // RGB is a white core over a black rim; alpha covers core, rim and optional shadow at the native maximum.
 // Measure placement from native cores, or shipped metrics for custom art. Keep a common row baseline
@@ -57,6 +58,8 @@ struct SpriteOptions {
     // The k each texture is built at once spriteswap.h's limits applied (set on a batch's copy; 0: as Sharpness asks).
     int kRec[kSpriteRecCount] = {};
     int kPlate = 0, kDamage = 0, kHud = 0, kJobs = 0;
+    // Each record's sheet scale (records.h: 2 or 4 for a scaled sheet); spriteswap.h keeps each texture's k a multiple of it.
+    int sheet[kSpriteRecCount] = {1, 1, 1, 1};
     // Builder defaults; the plugin replaces these with Settings::style.
     static SpriteOptions defaults() {
         SpriteOptions o;
@@ -403,6 +406,13 @@ inline Rect nativeInk(const SpritePixels& n, const Rect& box, int minLevel = 0) 
         }
     return x1 < 0 ? Rect{} : Rect::fromEdges(x0, y0, x1, y1);
 }
+// The same on a sheet `s` times the table: the box read at the sheet's own texels, the ink back in table texels (every
+// table texel an ink texel falls in).
+inline Rect nativeInkOn(const SpritePixels& n, int s, const Rect& box, int minLevel = 0) {
+    if (s <= 1) return nativeInk(n, box, minLevel);
+    const Rect r = nativeInk(n, Rect::fromEdges(box.u * s, box.v * s, box.x1() * s, box.y1() * s), minLevel);
+    return r.empty() ? r : Rect::fromEdges(r.u / s, r.v / s, (r.x1() + s - 1) / s, (r.y1() + s - 1) / s);
+}
 
 }  // namespace spritedetail
 
@@ -415,7 +425,14 @@ inline bool buildSpriteAtlas(SpriteRec rec, const std::vector<GlyphSlot>& slots,
     FtScope ftScope;   // this build's FreeType, freed when it returns
     const SpriteRecInfo& info = kSpriteRecs[int(rec)];
     if (o.k < 1 || o.k > 4) { why = "k must be 1..4"; return false; }
-    if (!native.valid() || native.w != info.w || native.h != info.h) { why = "the readback is not the record's size"; return false; }
+    const int sheet = native.valid() ? sheetScale(native.w, native.h, info.w, info.h) : 0;   // readback texels per table texel
+    if (!sheet) { why = "the readback is not the record's size (nor 2x or 4x it)"; return false; }
+    if (o.k % sheet) {
+        char b[160];
+        _snprintf_s(b, sizeof b, _TRUNCATE, "k %d is not a multiple of the %dx sheet's scale (its art would be resampled unevenly)", o.k, sheet);
+        why = b;
+        return false;
+    }
     if (shipped.r && shipped.n != slots.size()) {
         char b[160];
         _snprintf_s(b, sizeof b, _TRUNCATE, "the shipped retail measurements (S15) have %zu slots and the record %zu; custom letter art cannot be placed", shipped.n, slots.size());
@@ -423,23 +440,23 @@ inline bool buildSpriteAtlas(SpriteRec rec, const std::vector<GlyphSlot>& slots,
         return false;
     }
     for (const GlyphSlot& s : slots) {
-        const Rect all = Rect::fromEdges(0, 0, native.w, native.h);
+        const Rect all = Rect::fromEdges(0, 0, info.w, info.h);   // the slots are in table texels
         if (s.uni.empty() || !all.contains(s.uni) || !s.uni.contains(s.safe) || !s.uni.contains(s.fit)) {
             char b[128];
-            _snprintf_s(b, sizeof b, _TRUNCATE, "a glyph slot (%d,%d %dx%d) lies outside the %dx%d texture", s.uni.u, s.uni.v, s.uni.w, s.uni.h, native.w, native.h);
+            _snprintf_s(b, sizeof b, _TRUNCATE, "a glyph slot (%d,%d %dx%d) lies outside the %dx%d texture", s.uni.u, s.uni.v, s.uni.w, s.uni.h, int(info.w), int(info.h));
             why = b;
             return false;
         }
     }
-    const int k = o.k;
+    const int k = o.k, d = k / sheet;   // d: composite texels per readback texel
     a = SpriteAtlas{};
     a.rec = rec;
     a.k = k;
-    a.w = native.w * k;
-    a.h = native.h * k;
+    a.w = int(info.w) * k;
+    a.h = int(info.h) * k;
     a.px.resize(size_t(a.w) * size_t(a.h));
     for (int y = 0; y < a.h; y++)
-        for (int x = 0; x < a.w; x++) a.px[size_t(y) * size_t(a.w) + size_t(x)] = native.at(x / k, y / k);
+        for (int x = 0; x < a.w; x++) a.px[size_t(y) * size_t(a.w) + size_t(x)] = native.at(x / d, y / d);
     a.slots.assign(slots.size(), SlotResult{});
     if (o.mode == SpriteOptions::Mode::Identity) { a.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(); return true; }
 
@@ -449,8 +466,8 @@ inline bool buildSpriteAtlas(SpriteRec rec, const std::vector<GlyphSlot>& slots,
     for (size_t i = 0; i < slots.size(); i++) {
         const GlyphSlot& s = slots[i];
         if (s.group == Group::None || s.group == Group::Chat) continue;
-        for (int y = s.uni.v; y < s.uni.y1(); y++)   // full alpha over every owned area, a group that is off included
-            for (int x = s.uni.u; x < s.uni.x1(); x++) alphaMax = std::max(alphaMax, int(native.at(x, y) >> 24));
+        for (int y = s.uni.v * sheet; y < s.uni.y1() * sheet; y++)   // full alpha over every owned area, a group that is off included
+            for (int x = s.uni.u * sheet; x < s.uni.x1() * sheet; x++) alphaMax = std::max(alphaMax, int(native.at(x, y) >> 24));
         // Measure Labels even when disabled so nameplate marks retain their native size.
         const bool drawn = o.on[int(drawGroup(s, o))];
         if (!drawn && !o.on[int(s.group)] && !(o.plateMarks && s.group == Group::Labels)) continue;
@@ -458,8 +475,8 @@ inline bool buildSpriteAtlas(SpriteRec rec, const std::vector<GlyphSlot>& slots,
             ++a.group[int(drawGroup(s, o))].slots;
             active[i] = slotDrawn(s, o);
         }
-        ink[i] = nativeInk(native, s.safe, kCoreLevel);
-        if (ink[i].empty()) ink[i] = nativeInk(native, s.safe);
+        ink[i] = nativeInkOn(native, sheet, s.safe, kCoreLevel);
+        if (ink[i].empty()) ink[i] = nativeInkOn(native, sheet, s.safe);
         if (shipped.r && !ink[i].empty()) ink[i] = shipped.r[i];   // (shipped.n == slots.size()): placed by the retail measurements (the native fallback stays the sheet's own)
     }
     a.alphaFull = uint8_t(alphaMax ? alphaMax : 0x80);
@@ -732,7 +749,7 @@ inline bool buildSpriteAtlas(SpriteRec rec, const std::vector<GlyphSlot>& slots,
             res.outcome = SlotOutcome::NoNativeInk;
             ++gs.noInk;
             for (int y = s.uni.v * k; y < s.uni.y1() * k; y++)
-                for (int x = s.uni.u * k; x < s.uni.x1() * k; x++) a.px[size_t(y) * size_t(a.w) + size_t(x)] = native.at(x / k, y / k);
+                for (int x = s.uni.u * k; x < s.uni.x1() * k; x++) a.px[size_t(y) * size_t(a.w) + size_t(x)] = native.at(x / d, y / d);
             continue;
         }
         const GlyphFace* face = faceFor(dg, int(s.group), s.cls);
@@ -740,7 +757,7 @@ inline bool buildSpriteAtlas(SpriteRec rec, const std::vector<GlyphSlot>& slots,
             res.outcome = SlotOutcome::Error;
             ++gs.errors;
             for (int y = s.uni.v * k; y < s.uni.y1() * k; y++)
-                for (int x = s.uni.u * k; x < s.uni.x1() * k; x++) a.px[size_t(y) * size_t(a.w) + size_t(x)] = native.at(x / k, y / k);
+                for (int x = s.uni.u * k; x < s.uni.x1() * k; x++) a.px[size_t(y) * size_t(a.w) + size_t(x)] = native.at(x / d, y / d);
             continue;
         }
         const std::wstring text = drawnText(s.text, *face);
@@ -794,7 +811,7 @@ inline bool buildSpriteAtlas(SpriteRec rec, const std::vector<GlyphSlot>& slots,
             // The native art comes back (its union was cleared above; no other slot's fit box overlaps it).
             ++(res.outcome == SlotOutcome::Error ? gs.errors : gs.noGlyph);
             for (int y = s.uni.v * k; y < s.uni.y1() * k; y++)
-                for (int x = s.uni.u * k; x < s.uni.x1() * k; x++) a.px[size_t(y) * size_t(a.w) + size_t(x)] = native.at(x / k, y / k);
+                for (int x = s.uni.u * k; x < s.uni.x1() * k; x++) a.px[size_t(y) * size_t(a.w) + size_t(x)] = native.at(x / d, y / d);
             continue;
         }
         // Place: centred on the native ink (the glyph without its shadow), on the row's baseline.

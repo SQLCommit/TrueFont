@@ -25,10 +25,24 @@ constexpr bool spriteSizesBlockAligned() {
     return true;
 }
 static_assert(spriteSizesBlockAligned(), "DXT3 blocks are 4 x 4: every sprite-font texture must be a multiple of 4 each way");
-inline uint64_t spriteReadbackBytes() {
+// The readbacks at each record's sheet scale (a scaled sheet is read at its own size).
+inline uint64_t spriteReadbackBytes(const int (&s)[kSpriteRecCount]) {
     uint64_t n = 0;
-    for (const auto& r : kSpriteRecs) n += uint64_t(r.w) * uint64_t(r.h) * 4u;
+    for (int i = 0; i < kSpriteRecCount; i++) n += uint64_t(kSpriteRecs[i].w) * uint64_t(kSpriteRecs[i].h) * 4u * uint64_t((std::max)(1, s[i])) * uint64_t((std::max)(1, s[i]));
     return n;
+}
+// The readbacks at the game's own sheet sizes (every scale 1).
+inline uint64_t spriteReadbackBytes() {
+    int one[kSpriteRecCount];
+    for (int& x : one) x = 1;
+    return spriteReadbackBytes(one);
+}
+// The k a texture over a scaled sheet is built at: at least the sheet's scale and a multiple of it (3 on a 2x sheet is 4),
+// so its art is copied texel for texel and never downsampled.
+inline int sheetFloor(int k, int s) {
+    if (s <= 1) return k;
+    const int m = (std::max)(k, s);
+    return m + (s - m % s) % s;
 }
 
 // Nameplates use a separate composite rather than a group in the shared record.
@@ -68,13 +82,16 @@ inline Group baseGroup(SpriteRec r, const SpriteOptions& o) {
     }
     return Group::Labels;
 }
-inline int recordK(SpriteRec r, const SpriteOptions& o) { return groupK(baseGroup(r, o), o); }
+// A record's k, and a copy's (Nameplates, Damage numbers and HUD text copy font font, Job and level tags menu2fon): the
+// group's, raised to the record's sheet (sheetFloor).
+inline int recordK(SpriteRec r, const SpriteOptions& o) { return sheetFloor(groupK(baseGroup(r, o), o), o.sheet[int(r)]); }
+inline int splitK(Group g, const SpriteOptions& o) { return sheetFloor(groupK(g, o), o.sheet[int(g == Group::JobTags ? SpriteRec::Menu2fon : SpriteRec::FontFont)]); }
 // The k built once the memory limit applied (0: as asked).
 inline int effRecordK(SpriteRec r, const SpriteOptions& o) { return o.kRec[int(r)] ? o.kRec[int(r)] : recordK(r, o); }
-inline int effPlateK(const SpriteOptions& o) { return o.kPlate ? o.kPlate : groupK(Group::Nameplates, o); }
-inline int effDamageK(const SpriteOptions& o) { return o.kDamage ? o.kDamage : groupK(Group::Damage, o); }
-inline int effHudK(const SpriteOptions& o) { return o.kHud ? o.kHud : groupK(Group::NamesHud, o); }
-inline int effJobsK(const SpriteOptions& o) { return o.kJobs ? o.kJobs : groupK(Group::JobTags, o); }
+inline int effPlateK(const SpriteOptions& o) { return o.kPlate ? o.kPlate : splitK(Group::Nameplates, o); }
+inline int effDamageK(const SpriteOptions& o) { return o.kDamage ? o.kDamage : splitK(Group::Damage, o); }
+inline int effHudK(const SpriteOptions& o) { return o.kHud ? o.kHud : splitK(Group::NamesHud, o); }
+inline int effJobsK(const SpriteOptions& o) { return o.kJobs ? o.kJobs : splitK(Group::JobTags, o); }
 
 // Compare effective styles only for enabled groups; ignore Miss settings when Damage is disabled.
 inline bool sameDrawing(SpriteRec r, const SpriteOptions& a, const SpriteOptions& b) {
@@ -155,9 +172,10 @@ inline bool sameJobsExceptCompress(const SpriteOptions& a, const SpriteOptions& 
 struct SpriteKs {
     int rec[kSpriteRecCount] = {};
     int plate = 0, damage = 0, hud = 0, jobs = 0;   // the splits: copies of font font, and menu2fon's for jobs
+    int s[kSpriteRecCount] = {1, 1, 1, 1};           // each record's sheet scale: its readback's size, and the floor of its k and its copies'
 };
 inline uint64_t spriteKsBytes(const SpriteKs& k, TexFormat f) {
-    uint64_t n = spriteReadbackBytes();
+    uint64_t n = spriteReadbackBytes(k.s);
     const int ff = int(SpriteRec::FontFont), m2 = int(SpriteRec::Menu2fon);
     const auto one = [&](int w, int h, int x) { return managedBytes(texBytes(f, w * x, h * x)) + (f == TexFormat::A8R8G8B8 ? 0 : uint64_t(texBytes(TexFormat::A8L8, w * x, h * x))); };
     for (int i = 0; i < kSpriteRecCount; i++)
@@ -168,37 +186,46 @@ inline uint64_t spriteKsBytes(const SpriteKs& k, TexFormat f) {
     return n;
 }
 inline int stepKDown(int k, bool nonPow2) { return k >= 4 ? (nonPow2 ? 3 : 2) : k == 3 ? 2 : k == 2 ? 1 : k; }
+// A texture over a scaled sheet never goes below the sheet's scale, nor to a k it does not divide (sheetFloor).
 inline SpriteKs fitSpriteKs(SpriteKs k, uint64_t otherBytes, TexFormat f, bool nonPow2, unsigned long maxW, unsigned long maxH, std::string& why) {
     why.clear();
-    const auto fitCaps = [&](int& x, int w, int h) {
+    const int ff = int(SpriteRec::FontFont), m2 = int(SpriteRec::Menu2fon);
+    const auto floorOf = [&](int rec) { return (std::max)(1, k.s[rec]); };
+    const auto step = [&](int& x, int fl) {
+        x = stepKDown(x, nonPow2);
+        if (x % fl) x = stepKDown(x, nonPow2);
+        x = (std::max)(x, fl);
+    };
+    const auto fitCaps = [&](int& x, int w, int h, int fl) {
         if (!x) return;
-        if (x == 3 && !nonPow2) { x = 2; if (why.empty()) why = "3x makes a texture that is no power of two, and this card wants power-of-two textures (D3DPTEXTURECAPS_POW2)"; }
-        while (x > 1 && ((maxW && (unsigned long)(w * x) > maxW) || (maxH && (unsigned long)(h * x) > maxH))) {
+        if (x == 3 && !nonPow2) { x = sheetFloor(2, fl); if (why.empty()) why = "3x makes a texture that is no power of two, and this card wants power-of-two textures (D3DPTEXTURECAPS_POW2)"; }
+        while (x > fl && ((maxW && (unsigned long)(w * x) > maxW) || (maxH && (unsigned long)(h * x) > maxH))) {
             if (why.empty()) why = fmt("a %dx%d texture is larger than this card's largest (%lux%lu)", w * x, h * x, maxW, maxH);
-            x = stepKDown(x, nonPow2);
+            step(x, fl);
         }
     };
-    for (int i = 0; i < kSpriteRecCount; i++) fitCaps(k.rec[i], kSpriteRecs[i].w, kSpriteRecs[i].h);
-    fitCaps(k.plate, kSpriteRecs[0].w, kSpriteRecs[0].h);
-    fitCaps(k.damage, kSpriteRecs[0].w, kSpriteRecs[0].h);
-    fitCaps(k.hud, kSpriteRecs[0].w, kSpriteRecs[0].h);
-    fitCaps(k.jobs, kSpriteRecs[1].w, kSpriteRecs[1].h);
+    for (int i = 0; i < kSpriteRecCount; i++) fitCaps(k.rec[i], kSpriteRecs[i].w, kSpriteRecs[i].h, floorOf(i));
+    fitCaps(k.plate, kSpriteRecs[ff].w, kSpriteRecs[ff].h, floorOf(ff));
+    fitCaps(k.damage, kSpriteRecs[ff].w, kSpriteRecs[ff].h, floorOf(ff));
+    fitCaps(k.hud, kSpriteRecs[ff].w, kSpriteRecs[ff].h, floorOf(ff));
+    fitCaps(k.jobs, kSpriteRecs[m2].w, kSpriteRecs[m2].h, floorOf(m2));
     for (int guard = 0; guard < 64 && otherBytes + spriteKsBytes(k, f) > kMemoryLimit; guard++) {
         int* worst = nullptr;
+        int worstFloor = 1;
         uint64_t worstBytes = 0;
-        const auto consider = [&](int& x, int w, int h) {
-            if (x <= 1) return;
+        const auto consider = [&](int& x, int w, int h, int fl) {
+            if (x <= fl) return;
             const uint64_t b = texBytes(f, w * x, h * x);
-            if (b > worstBytes) { worstBytes = b; worst = &x; }
+            if (b > worstBytes) { worstBytes = b; worst = &x; worstFloor = fl; }
         };
-        for (int i = 0; i < kSpriteRecCount; i++) consider(k.rec[i], kSpriteRecs[i].w, kSpriteRecs[i].h);
-        consider(k.plate, kSpriteRecs[0].w, kSpriteRecs[0].h);
-        consider(k.damage, kSpriteRecs[0].w, kSpriteRecs[0].h);
-        consider(k.hud, kSpriteRecs[0].w, kSpriteRecs[0].h);
-        consider(k.jobs, kSpriteRecs[1].w, kSpriteRecs[1].h);
-        if (!worst) break;   // everything at 1x: nothing more to take away
+        for (int i = 0; i < kSpriteRecCount; i++) consider(k.rec[i], kSpriteRecs[i].w, kSpriteRecs[i].h, floorOf(i));
+        consider(k.plate, kSpriteRecs[ff].w, kSpriteRecs[ff].h, floorOf(ff));
+        consider(k.damage, kSpriteRecs[ff].w, kSpriteRecs[ff].h, floorOf(ff));
+        consider(k.hud, kSpriteRecs[ff].w, kSpriteRecs[ff].h, floorOf(ff));
+        consider(k.jobs, kSpriteRecs[m2].w, kSpriteRecs[m2].h, floorOf(m2));
+        if (!worst) break;   // everything at its floor (1x, or its sheet's scale): nothing more to take away
         if (why.empty() || why.find("MB") == std::string::npos) why = fmt("the total would pass %s", mbText(kMemoryLimit).c_str());
-        *worst = stepKDown(*worst, nonPow2);
+        step(*worst, worstFloor);
     }
     return k;
 }
@@ -448,8 +475,9 @@ public:
         std::string limit;
         const TexFormat f = planFormat(opts_);
         planKs(opts_, f, want, got, limit);
-        for (int i = 0; i < kSpriteRecCount; i++) want.rec[i] = want.rec[i] ? 1 : 0;
-        for (int* x : {&want.plate, &want.damage, &want.hud, &want.jobs}) *x = *x ? 1 : 0;
+        for (int i = 0; i < kSpriteRecCount; i++) want.rec[i] = want.rec[i] ? sheetFloor(1, want.s[i]) : 0;   // 1x, or the sheet's scale
+        for (int* x : {&want.plate, &want.damage, &want.hud}) *x = *x ? sheetFloor(1, want.s[int(SpriteRec::FontFont)]) : 0;
+        want.jobs = want.jobs ? sheetFloor(1, want.s[int(SpriteRec::Menu2fon)]) : 0;
         // Omit splits that become identical to the shared texture at 1x.
         const SpriteKs built = builtKs(withKs(opts_, want), want);
         if (!built.plate) want.plate = 0;
@@ -462,7 +490,9 @@ public:
     uint64_t pendingBytes() const { return building_ ? batchNewBytes_ : 0; }
     bool setOptions(const SpriteOptions& o) {
         const bool same = sameOptions(o, opts_);
+        const SpriteOptions was = opts_;
         opts_ = o;
+        for (int i = 0; i < kSpriteRecCount; i++) opts_.sheet[i] = was.sheet[i];   // the records' own (read at the look), never the caller's
         if (same) return false;
         batchQuietNext_ = false;   // the rebuild due (if any) is this change's
         if (!failure_.empty()) { info("sprites: options changed: the refusal is retried"); clearLatches(); return false; }
@@ -547,6 +577,7 @@ public:
         CodeMapCheck codes;               // the fontshp / dmgnum code -> rect map (font font only)
         bool codesChecked = false;
         int peak = 0, w = 0, h = 0, k = 0;
+        int scale = 1;                    // the record's sheet scale (2 or 4: a scaled sheet)
         TexFormat format = TexFormat::A8R8G8B8;   // TrueFont's texture's (while w > 0)
         const IDirect3DTexture8* texture = nullptr;
         bool installed = false;
@@ -556,7 +587,7 @@ public:
         RecordReport o;
         o.gate = s.gate; o.why = s.why; o.d1 = s.d1; o.check = s.check; o.checked = s.checked; o.pin = s.pin; o.shippedPin = tableFor(r, tables_).pin;
         o.sessionPin = s.sessionPin; o.customArt = s.customArt; o.codes = s.codes; o.codesChecked = s.codesChecked;
-        o.peak = s.peak; o.w = s.ours ? s.w : 0; o.h = s.ours ? s.h : 0; o.k = s.ours ? s.k : 0; o.installed = s.installed;
+        o.peak = s.peak; o.w = s.ours ? s.w : 0; o.h = s.ours ? s.h : 0; o.k = s.ours ? s.k : 0; o.installed = s.installed; o.scale = s.s;
         o.format = s.format; o.texture = s.ours;
         return o;
     }
@@ -567,8 +598,8 @@ public:
         SlotCompare out;
         const Rec& s = rec(r);
         if (!s.ours || !s.rb || !s.built || s.k < 1) { out.why = "no texture of TrueFont's for this record"; return out; }
-        const int k = s.k, w = s.w, h = s.h;
-        if (w != s.rb->w * k || h != s.rb->h * k) { out.why = "the texture is not the readback's size times k"; return out; }
+        const int k = s.k, w = s.w, h = s.h, d = k / (std::max)(1, s.s);   // d: texels per readback texel
+        if (k % (std::max)(1, s.s) || w * s.s != s.rb->w * k || h * s.s != s.rb->h * k) { out.why = "the texture is not the table's size times k over the readback's sheet"; return out; }
         // The mask: g's slot unions, less every slot drawn for another group.
         const std::vector<GlyphSlot>& slots = *s.slots;
         std::vector<uint8_t> mask(size_t(w) * size_t(h), 0);
@@ -580,7 +611,7 @@ public:
         for (const GlyphSlot& gs : slots) if (gs.group != g && slotDrawn(gs, s.builtOpts)) paint(gs.uni, 0);
         std::vector<uint32_t> nat(size_t(w) * size_t(h));
         for (int y = 0; y < h; y++)
-            for (int x = 0; x < w; x++) nat[size_t(y) * size_t(w) + size_t(x)] = s.rb->at(x / k, y / k);
+            for (int x = 0; x < w; x++) nat[size_t(y) * size_t(w) + size_t(x)] = s.rb->at(x / d, y / d);
         TexImage want;
         if (!toTexImage(nat, w, h, s.format, want)) { out.why = "the readback could not be packed"; return out; }
         auto* tex = s.ours;
@@ -673,6 +704,13 @@ public:
         return GroupState::Unavailable;
     }
 
+    // Its record stays native for its letter layout (a DAT mod's rects, code map or sheet size are not the tables'), not for
+    // the game's language or version.
+    bool groupLayoutUnknown(Group g) const {
+        if (g == Group::Chat || (g == Group::Nameplates && !plateAvailable()) || !languageRefusal().empty()) return false;
+        const SpriteRec main = g == Group::Headings || g == Group::JobTags ? SpriteRec::Menu2fon : g == Group::Compass ? SpriteRec::News : SpriteRec::FontFont;
+        return rec(main).gate == Gate::Native && rec(main).layoutNative && !rec(main).artNative;
+    }
     // The group's record still holds an earlier texture of TrueFont's: only a game restart clears it.
     bool groupNeedsRestart(Group g) const {
         if (g == Group::Chat) return false;
@@ -722,7 +760,8 @@ public:
         if (sp.copy) {
             TexRecord t;
             const SpriteRecInfo& in = kSpriteRecs[int(SpriteRec::FontFont)];
-            o.copyOk = readRecord(reader_, o.copy, t) && t.vtable == vtableVA() && std::memcmp(t.name, in.name, 16) == 0 && t.w == in.w && t.h == in.h &&
+            const int sc = (std::max)(1, rec(SpriteRec::FontFont).s);   // the copy keeps the record's own +24/+26
+            o.copyOk = readRecord(reader_, o.copy, t) && t.vtable == vtableVA() && std::memcmp(t.name, in.name, 16) == 0 && t.w == in.w * sc && t.h == in.h * sc &&
                        t.tex40 == uintptr_t(sp.ours) && t.tex44 == 0 && rd<uint32_t>(o.copy + kRecNext) == 0;
         }
         return o;
@@ -792,8 +831,8 @@ public:
         PlateCompare out;
         const Rec& ff = rec(SpriteRec::FontFont);
         if (!plate_.ours || !plate_.built) { out.why = "no nameplate composite"; return out; }
-        const int k = plate_.k, w = plate_.w, h = plate_.h;
-        if (!ff.rb || w != ff.rb->w * k || h != ff.rb->h * k) { out.why = "the composite is not the readback's size times k"; return out; }
+        const int k = plate_.k, w = plate_.w, h = plate_.h, sc = (std::max)(1, ff.s), d = k / sc;   // d: texels per readback texel
+        if (!ff.rb || k % sc || w * sc != ff.rb->w * k || h * sc != ff.rb->h * k) { out.why = "the composite is not the table's size times k over the readback's sheet"; return out; }
         std::vector<uint8_t> mask(size_t(w) * size_t(h), 0);   // 1 Names and HUD, 2 a plate mark
         for (const GlyphSlot& gs : *ff.slots)
             if (gs.group == Group::NamesHud || gs.plateMark)
@@ -805,7 +844,7 @@ public:
         if (!baseTex) {
             std::vector<uint32_t> nat(size_t(w) * size_t(h));
             for (int y = 0; y < h; y++)
-                for (int x = 0; x < w; x++) nat[size_t(y) * size_t(w) + size_t(x)] = ff.rb->at(x / k, y / k);
+                for (int x = 0; x < w; x++) nat[size_t(y) * size_t(w) + size_t(x)] = ff.rb->at(x / d, y / d);
             if (!toTexImage(nat, w, h, plate_.format, packed)) { out.why = "the readback could not be packed"; return out; }
         }
         D3DLOCKED_RECT lp{}, lb{};
@@ -888,6 +927,8 @@ public:
                 s.wentNative = s.artNative = s.layoutNative = s.retiredHeld = false;
                 s.customArt = s.codesChecked = false;   // the art and the code map are read afresh (a new pin)
                 s.sessionPin = 0;
+                s.s = 1;                                 // and the sheet's scale
+                opts_.sheet[int(s.id)] = 1;
             }
         }
     }
@@ -1149,6 +1190,7 @@ private:
         bool customArt = false;          // that pin is not the shipped one: custom letter art, placed by the shipped metrics
         CodeMapCheck codes;              // the fontshp / dmgnum code -> rect map (font font only)
         bool codesChecked = false;
+        int s = 1;                       // the sheet's scale read at this on's look (2 or 4: a scaled sheet, placed as custom letter art)
     };
     Rec& rec(SpriteRec r) { return recs_[int(r)]; }
     const Rec& rec(SpriteRec r) const { return recs_[int(r)]; }
@@ -1545,7 +1587,7 @@ private:
     }
     // The leaf read once more just before its write: the walk's rect (one the tables accept), the record's texture name, +4C.
     enum class LeafId { Unreadable, Differs, Ok };
-    static LeafId leafIdentity(const LiveLeaf& l, SpriteRec base, TableSet ts, uint32_t& v) {
+    static LeafId leafIdentity(const LiveLeaf& l, SpriteRec base, TableSet ts, int scale, uint32_t& v) {
         v = 0;
         uint8_t head[kLeafRecord + 4];
         if (!readRaw(l.addr, head, sizeof head)) return LeafId::Unreadable;
@@ -1555,7 +1597,9 @@ private:
         std::memcpy(&r.u, head + kLeafU, 2);
         std::memcpy(&r.v, head + kLeafV, 2);
         std::memcpy(&v, head + kLeafRecord, 4);
-        if (!(r == l.r) || !rectKnown(base, r, ts)) return LeafId::Differs;
+        bool exact = false;
+        const Rect t = scaledDown(r, scale, exact);   // the table's rect (the record's sheet scale)
+        if (!(r == l.r) || !exact || !rectKnown(base, t, ts)) return LeafId::Differs;
         const char* want = kSpriteRecs[int(base)].name;
         for (int i = 0; i < 16; i++) {
             char a = char(head[kLeafName + i]), c = want[i];
@@ -1595,7 +1639,7 @@ private:
         int wrote = 0, again = 0, left = 0, failed = 0, refused = 0;
         for (const LiveLeaf& l : fresh) {
             uint32_t v = 0;
-            const LeafId id = leafIdentity(l, ls.base, tables_, v);
+            const LeafId id = leafIdentity(l, ls.base, tables_, b.s, v);
             if (id == LeafId::Unreadable) { ++failed; continue; }
             if (v == copy) { now.push_back(l.addr); continue; }   // bound already (the restore walks every set for the copy anyway)
             if (v != native) { ++left; continue; }                 // 0 (resolved lazily by name at its next draw) or foreign: next time
@@ -1772,7 +1816,8 @@ private:
         TexRecord t;
         if (!readRecord(reader_, r, t)) return false;
         const SpriteRecInfo& in = kSpriteRecs[int(id)];
-        return vtableVA() && t.vtable == vtableVA() && std::memcmp(t.name, in.name, 16) == 0 && t.w == in.w && t.h == in.h && (restoring || !t.skipped());
+        const int sc = (std::max)(1, rec(id).s);   // this on's sheet scale: a record at another scale is not this one
+        return vtableVA() && t.vtable == vtableVA() && std::memcmp(t.name, in.name, 16) == 0 && t.w == in.w * sc && t.h == in.h * sc && (restoring || !t.skipped());
     }
     static bool isRetired(const Rec& s, uintptr_t t) { for (const uintptr_t r : s.retired) if (r == t) return true; return false; }
     static bool isOurs(const Rec& s, uintptr_t t) { return t && (t == uintptr_t(s.ours) || isRetired(s, t)); }
@@ -1907,9 +1952,9 @@ private:
         return true;
     }
     static std::string descText(const D3DSURFACE_DESC& d) { return fmt("%s %ux%u pool %s", formatName(d.Format).c_str(), d.Width, d.Height, poolName(d.Pool)); }
-    // The record's own texture into A8R8G8B8 at the record's size.
-    bool readSprite(uintptr_t t, const D3DSURFACE_DESC& d, const SpriteRecInfo& in, SpritePixels& out, std::string& why) const {
-        if (d.Width != in.w || d.Height != in.h) { why = fmt("its texture is %ux%u, not the record's %ux%u", d.Width, d.Height, in.w, in.h); return false; }
+    // The record's own texture into A8R8G8B8 at its size: the table's times the sheet's scale `sc`.
+    bool readSprite(uintptr_t t, const D3DSURFACE_DESC& d, const SpriteRecInfo& in, int sc, SpritePixels& out, std::string& why) const {
+        if (d.Width != in.w * unsigned(sc) || d.Height != in.h * unsigned(sc)) { why = fmt("its texture is %ux%u, not the record's %ux%u", d.Width, d.Height, in.w * unsigned(sc), in.h * unsigned(sc)); return false; }
         if (d.Pool == D3DPOOL_DEFAULT) { why = "its texture is in D3DPOOL_DEFAULT, which cannot be locked"; return false; }
         const bool dxt3 = d.Format == D3DFMT_DXT3, argb = d.Format == D3DFMT_A8R8G8B8;
         if (!dxt3 && !argb) { why = "its texture format " + formatName(d.Format) + " is not one TrueFont decodes (DXT3, A8R8G8B8)"; return false; }
@@ -1942,8 +1987,8 @@ private:
     bool readAndPin(Rec& s, uintptr_t t, SpritePixels& px, std::string& why, bool first, bool* artDiffers = nullptr) {
         if (artDiffers) *artDiffers = false;
         D3DSURFACE_DESC d{};
-        if (!describeTex(t, d, why) || !readSprite(t, d, kSpriteRecs[int(s.id)], px, why)) { why = "its texture could not be read back: " + why; return false; }
-        const uint32_t pin = texturePin(s.id, px.px.data(), px.w, px.h, tables_), shipped = tableFor(s.id, tables_).pin;
+        if (!describeTex(t, d, why) || !readSprite(t, d, kSpriteRecs[int(s.id)], s.s, px, why)) { why = "its texture could not be read back: " + why; return false; }
+        const uint32_t pin = texturePin(s.id, px.px.data(), px.w, px.h, tables_, s.s), shipped = tableFor(s.id, tables_).pin;
         int peak = 0;
         for (const uint32_t p : px.px) peak = (std::max)(peak, int(p >> 24));
         s.pin = pin;
@@ -1952,8 +1997,12 @@ private:
                  first ? "" : fmt(", session %08X", s.sessionPin).c_str()));
         if (first) {
             s.sessionPin = pin;
-            s.customArt = pin != shipped;
-            if (s.customArt)
+            s.customArt = pin != shipped || s.s > 1;   // a scaled sheet is redrawn art: placed by the table's metrics
+            if (s.s > 1)
+                info(fmt("sprites: %s: %dx scaled layout (a DAT mod); installing as custom letter art (pin %08X over its %dx%d sheet, shipped %08X): TrueFont's letters sit as on "
+                         "retail, everything it does not own keeps this art at its own density",
+                         nameOf(s), s.s, pin, px.w, px.h, shipped));
+            else if (s.customArt)
                 info(fmt("sprites: %s: custom letter art (pin %08X, shipped %08X%s); installing; metrics from the table (TrueFont's letters sit as on retail; everything it "
                          "does not own keeps this art)",
                          nameOf(s), pin, shipped, tables_ == TableSet::Japanese && s.id == SpriteRec::Menu2fon ? "; the Japanese client's sheet re-encodes the same letters" : ""));
@@ -2011,15 +2060,21 @@ private:
             const RecordFind& f = cs.rec[int(s.id)];
             if ((cs.fault || cs.limitHit || f.hits == 0) && patient) { waiting = true; continue; }
             if (cs.fault || cs.limitHit) { setGate(s, Gate::Failed, f.why); continue; }
-            if (!f.valid) { setGate(s, Gate::Native, "its texture record did not check out: " + f.why); continue; }
+            if (!f.valid) {
+                s.layoutNative = f.sizeRefused;   // a sheet size no scale of the table's: the letter layout is not one TrueFont knows
+                setGate(s, Gate::Native, "its texture record did not check out: " + f.why);
+                continue;
+            }
             s.rec = f.first.rec;
+            s.s = f.scale;
+            opts_.sheet[int(s.id)] = f.scale;
             found.push_back(&s);
         }
         if (waiting) {
             waitLog(3, "waiting for the menu font textures to be loaded (60 s at most)");
             if (found.empty()) return;
             // Some are here: wait for the others first (one registry walk for all).
-            for (Rec* s : found) s->rec = 0;
+            for (Rec* s : found) { s->rec = 0; s->s = 1; opts_.sheet[int(s->id)] = 1; }
             return;
         }
         if (!found.empty()) {
@@ -2038,12 +2093,35 @@ private:
                      qpcMs() - t1, rs.fault ? ", FAULT" : "", rs.limitHit ? ", LIMIT" : ""));
             for (Rec* s : found) {
                 if (!ok) { setGate(*s, Gate::Failed, rs.limitHit ? "the sprite registry did not end (limit reached)" : "the sprite registry could not be read"); continue; }
-                const std::vector<Rect> live = rectsOf(rs, s->rec, kSpriteRecs[int(s->id)].name, aliasOf(*s));
+                std::vector<Rect> offGrid;
+                const std::vector<Rect> live = rectsOf(rs, s->rec, kSpriteRecs[int(s->id)].name, aliasOf(*s), s->s, &offGrid);
                 const RectCheck c = checkRects(s->id, live, tables_);
                 s->check = c;
                 s->checked = true;
-                info(fmt("sprites: D9: %s: %d live rects: %d owned (of %d shipped), %d foreign, %d outside, %zu unknown; hash %08X, shipped %08X (%s)", nameOf(*s), c.rects, c.owned,
-                         c.ownedShipped, c.foreign, c.outside, c.unknown.size(), c.liveHash, c.shippedHash, c.complete() ? "complete" : c.ok() ? "partial set, all known" : "MISMATCH"));
+                info(fmt("sprites: D9: %s: %d live rects: %d owned (of %d shipped), %d foreign, %d outside, %zu unknown; hash %08X, shipped %08X (%s)%s", nameOf(*s), c.rects, c.owned,
+                         c.ownedShipped, c.foreign, c.outside, c.unknown.size(), c.liveHash, c.shippedHash, c.complete() ? "complete" : c.ok() ? "partial set, all known" : "MISMATCH",
+                         s->s > 1 ? fmt("; a %dx sheet: its rects divided by %d, %zu off its grid", s->s, s->s, offGrid.size()).c_str() : ""));
+                // Rects off the grid: harmless where they read texels TrueFont copies unchanged or where a set left at
+                // the unscaled layout reads the mod's letters anyway; any other one means the letters are not where the
+                // table's layout scaled puts them.
+                const OffGridCheck og = checkOffGrid(s->id, offGrid, s->s, tables_);
+                const auto named = [&](const Rect& r) {
+                    return fmt("%d,%d %dx%d in \"%s\"", r.u, r.v, r.w, r.h, setSampling(rs, r, s->rec, kSpriteRecs[int(s->id)].name, aliasOf(*s)).c_str());
+                };
+                if (!og.clear.empty())
+                    info(fmt("sprites: %s: %zu of its live rects are off its %dx sheet's grid but touch no glyph TrueFont draws (first %s): they read the sheet's own texels, left as they are",
+                             nameOf(*s), og.clear.size(), s->s, named(og.clear[0]).c_str()));
+                if (!og.unscaled.empty())
+                    info(fmt("sprites: %s: %zu of its live rects are the tables' own rects, unscaled, on its %dx sheet (first %s): a sprite set the DAT mod left at the game's "
+                             "unscaled layout; it reads a piece of the mod's letters with or without TrueFont, left as it is",
+                             nameOf(*s), og.unscaled.size(), s->s, named(og.unscaled[0]).c_str()));
+                if (!og.ok()) {
+                    s->layoutNative = true;
+                    setGate(*s, Gate::Native,
+                            fmt("%zu of its live rects are off its %dx sheet's grid over a glyph (first %s): its letter layout is not the tables' scaled", og.refused.size(), s->s,
+                                named(og.refused[0]).c_str()));
+                    continue;
+                }
                 if (!c.ok()) {
                     s->layoutNative = !c.unknown.empty();   // unknown rects are the client's layout; none in use may change
                     setGate(*s, Gate::Native,
@@ -2060,7 +2138,7 @@ private:
                     continue;
                 }
                 if (s->id == SpriteRec::FontFont) {   // the fontshp / dmgnum code -> rect maps too
-                    s->codes = checkCodeMap(rs, s->rec, kSpriteRecs[int(s->id)].name, aliasOf(*s), tables_);
+                    s->codes = checkCodeMap(rs, s->rec, kSpriteRecs[int(s->id)].name, aliasOf(*s), tables_, s->s);
                     s->codesChecked = true;
                     info(fmt("sprites: D9 codes: font font: %d fontshp / dmgnum leaves checked against the tables' code -> rect map: %s", s->codes.leaves,
                              s->codes.ok() ? "all as the tables have them" : ("MISMATCH, " + std::to_string(s->codes.mismatches) + ": " + s->codes.first).c_str()));
@@ -2103,12 +2181,13 @@ private:
         want = SpriteKs{};
         for (int i = 0; i < kSpriteRecCount; i++) {
             const Rec& s = recs_[i];
+            want.s[i] = s.rb ? (std::max)(1, o.sheet[i]) : 1;   // a readback held at its sheet's size
             want.rec[i] = s.gate == Gate::Ok && s.rb && !s.wentNative && recordOn(s.id, o) ? recordK(s.id, o) : 0;
         }
-        want.plate = splitWanted(plate_, o) ? groupK(Group::Nameplates, o) : 0;
-        want.damage = splitWanted(dmg_, o) ? groupK(Group::Damage, o) : 0;
-        want.hud = leafWanted(hud_, o) ? groupK(Group::NamesHud, o) : 0;
-        want.jobs = leafWanted(jobs_, o) ? groupK(Group::JobTags, o) : 0;
+        want.plate = splitWanted(plate_, o) ? splitK(Group::Nameplates, o) : 0;
+        want.damage = splitWanted(dmg_, o) ? splitK(Group::Damage, o) : 0;
+        want.hud = leafWanted(hud_, o) ? splitK(Group::NamesHud, o) : 0;
+        want.jobs = leafWanted(jobs_, o) ? splitK(Group::JobTags, o) : 0;
         got = fitSpriteKs(want, otherBytes_, f, nonPow2_, maxTexW_, maxTexH_, limit);
     }
     static bool sameKs(const SpriteKs& a, const SpriteKs& b) {
@@ -2123,10 +2202,10 @@ private:
     // `o` with the ks of `got` (0 there: the group's own k), as a batch builds it.
     static SpriteOptions withKs(SpriteOptions o, const SpriteKs& got) {
         for (int i = 0; i < kSpriteRecCount; i++) o.kRec[i] = got.rec[i] ? got.rec[i] : recordK(SpriteRec(i), o);
-        o.kPlate = got.plate ? got.plate : groupK(Group::Nameplates, o);
-        o.kDamage = got.damage ? got.damage : groupK(Group::Damage, o);
-        o.kHud = got.hud ? got.hud : groupK(Group::NamesHud, o);
-        o.kJobs = got.jobs ? got.jobs : groupK(Group::JobTags, o);
+        o.kPlate = got.plate ? got.plate : splitK(Group::Nameplates, o);
+        o.kDamage = got.damage ? got.damage : splitK(Group::Damage, o);
+        o.kHud = got.hud ? got.hud : splitK(Group::NamesHud, o);
+        o.kJobs = got.jobs ? got.jobs : splitK(Group::JobTags, o);
         return o;
     }
     // Omit splits that become identical to the shared texture at the fitted scale.
@@ -2178,7 +2257,7 @@ private:
         std::string limit;
         const TexFormat f = planFormat(opts_);
         planKs(opts_, f, want, got, limit);
-        const uint64_t fresh = spriteKsBytes(got, f) - spriteReadbackBytes();   // the new textures and kept composites
+        const uint64_t fresh = spriteKsBytes(got, f) - spriteReadbackBytes(got.s);   // the new textures and kept composites
         if (otherBytes_ + memoryBytes() + fresh <= kMemoryLimit) { chatHoldSaid_ = false; return false; }
         if (!chatHoldSaid_) {
             chatHoldSaid_ = true;
@@ -2254,11 +2333,29 @@ private:
         if (built.damage) ks += fmt(", damage numbers %dx", built.damage);
         if (built.hud) ks += fmt(", HUD text %dx", built.hud);
         if (built.jobs) ks += fmt(", Job and level tags %dx", built.jobs);
-        info(fmt("sprites: memory: Chat/Items' build peak %s, these fonts %s (%s; textures as %s, counted %s as MANAGED, and their A8L8 kept copies; readbacks %s); total %s "
+        std::string sheets;   // the scaled sheets: their readbacks are read at their own size
+        for (int i = 0; i < kSpriteRecCount; i++)
+            if (built.s[i] > 1) sheets += fmt("%s%s's letter sheet is %dx", sheets.empty() ? ", " : "; ", kSpriteRecs[i].shortName, built.s[i]);
+        info(fmt("sprites: memory: Chat/Items' build peak %s, these fonts %s (%s; textures as %s, counted %s as MANAGED, and their A8L8 kept copies; readbacks %s%s); total %s "
                  "(limit %s)",
                  mbText(otherBytes_).c_str(),
-                 mbText(mine).c_str(), ks.empty() ? "nothing built" : ks.c_str(), texFormatName(f), kManagedCountText, mbText(spriteReadbackBytes()).c_str(),
+                 mbText(mine).c_str(), ks.empty() ? "nothing built" : ks.c_str(), texFormatName(f), kManagedCountText, mbText(spriteReadbackBytes(built.s)).c_str(), sheets.c_str(),
                  mbText(otherBytes_ + mine).c_str(), mbText(kMemoryLimit).c_str()));
+        {   // a k raised to a scaled sheet's (its art is never downsampled), said once per outcome
+            std::string raised;
+            const auto up = [&](const char* what, int asked, int k, SpriteRec r) {
+                if (!k || k <= asked) return;
+                raised += fmt("%s%s raised to %dx (asked %dx): its letter sheet is %ux%u", raised.empty() ? "" : "; ", what, k, asked, kSpriteRecs[int(r)].w * unsigned(built.s[int(r)]),
+                              kSpriteRecs[int(r)].h * unsigned(built.s[int(r)]));
+            };
+            for (int i = 0; i < kSpriteRecCount; i++) up(kSpriteRecs[i].shortName, groupK(baseGroup(SpriteRec(i), o), o), want.rec[i], SpriteRec(i));
+            up("nameplates", groupK(Group::Nameplates, o), want.plate, SpriteRec::FontFont);
+            up("damage numbers", groupK(Group::Damage, o), want.damage, SpriteRec::FontFont);
+            up("HUD text", groupK(Group::NamesHud, o), want.hud, SpriteRec::FontFont);
+            up("Job and level tags", groupK(Group::JobTags, o), want.jobs, SpriteRec::Menu2fon);
+            if (raised != raisedSaid_ && !raised.empty()) info("sprites: " + raised);
+            raisedSaid_ = raised;
+        }
         // Report each constrained texture in the log; deduplicate group-level Sharpness warnings in chat.
         std::string lower, groups;
         const auto note = [&](const char* what, Group grp, int w, int g) {
@@ -2523,7 +2620,7 @@ private:
         if (isRetired(s, now)) { why = fmt("record %08X holds an earlier TrueFont texture; nothing written", unsigned(r)); return false; }
         D3DSURFACE_DESC d{};
         if (!describeTex(now, d, why)) return false;
-        if (d.Width != kSpriteRecs[int(s.id)].w || d.Height != kSpriteRecs[int(s.id)].h) { why = "the record's texture is now " + descText(d) + ", not the size it had"; return false; }
+        if (d.Width != kSpriteRecs[int(s.id)].w * unsigned(s.s) || d.Height != kSpriteRecs[int(s.id)].h * unsigned(s.s)) { why = "the record's texture is now " + descText(d) + ", not the size it had"; return false; }
         s.ours->AddRef();
         const WriteResult wr = wrVerifiedWhy<uint32_t>(r + kTexPrimary, uint32_t(uintptr_t(s.ours)), uint32_t(now));
         if (wr != WriteResult::Ok) {
@@ -2726,20 +2823,28 @@ private:
                  regCache_.walkedLast, rs.resources, rs.composites, rs.leaves, rs.kept.size()));
         watchRegistry(rs);
         for (Rec* s : live) {
-            const RectCheck c = checkRects(s->id, rectsOf(rs, s->rec, kSpriteRecs[int(s->id)].name, aliasOf(*s)), tables_);
+            std::vector<Rect> offGrid;
+            const RectCheck c = checkRects(s->id, rectsOf(rs, s->rec, kSpriteRecs[int(s->id)].name, aliasOf(*s), s->s, &offGrid), tables_);
+            const OffGridCheck og = checkOffGrid(s->id, offGrid, s->s, tables_);
             s->check = c;
-            info(fmt("sprites: D9 again (%.2f ms): %s: %d live rects: %d owned (of %d), %d foreign, %zu unknown (%s)", qpcMs() - t0, nameOf(*s), c.rects, c.owned, c.ownedShipped,
-                     c.foreign, c.unknown.size(), c.complete() ? "complete" : c.ok() ? "partial set, all known" : "MISMATCH"));
+            info(fmt("sprites: D9 again (%.2f ms): %s: %d live rects: %d owned (of %d), %d foreign, %zu unknown (%s)%s", qpcMs() - t0, nameOf(*s), c.rects, c.owned, c.ownedShipped,
+                     c.foreign, c.unknown.size(), c.complete() ? "complete" : c.ok() ? "partial set, all known" : "MISMATCH",
+                     offGrid.empty() ? "" : fmt("; off its %dx grid: %zu clear of the glyphs, %zu unscaled table rects, %zu over a glyph", s->s, og.clear.size(), og.unscaled.size(),
+                                                og.refused.size()).c_str()));
             // The code -> rect maps (a fontshp or dmgnum set loaded or reloaded with its composites reordered).
             if (s->id == SpriteRec::FontFont) {
-                s->codes = checkCodeMap(rs, s->rec, kSpriteRecs[int(s->id)].name, aliasOf(*s), tables_);
+                s->codes = checkCodeMap(rs, s->rec, kSpriteRecs[int(s->id)].name, aliasOf(*s), tables_, s->s);
                 if (!s->codes.ok()) {
                     dropRecord(*s, "a sprite set loaded later has a code -> rect map the tables do not (" + s->codes.first + ")");
                     continue;
                 }
             }
-            // A live rect "not in use now" is not a mismatch; only rects present but unknown drop the record.
-            if (!c.unknown.empty())
+            // A live rect "not in use now" is not a mismatch; only rects present but unknown (or off a scaled sheet's grid over a glyph) drop the record.
+            if (!og.ok())
+                dropRecord(*s, fmt("a sprite set loaded later samples it with %zu rects off its %dx sheet's grid over a glyph (first %d,%d %dx%d in \"%s\")", og.refused.size(), s->s,
+                                   og.refused[0].u, og.refused[0].v, og.refused[0].w, og.refused[0].h,
+                                   setSampling(rs, og.refused[0], s->rec, kSpriteRecs[int(s->id)].name, aliasOf(*s)).c_str()));
+            else if (!c.unknown.empty())
                 dropRecord(*s, fmt("a sprite set loaded later samples it with %zu rects the tables do not know (first %d,%d %dx%d)", c.unknown.size(), c.unknown[0].u, c.unknown[0].v,
                                    c.unknown[0].w, c.unknown[0].h));
             else if (!c.owned) info(fmt("sprites: %s: no loaded sprite set samples it now; kept as it is", nameOf(*s)));
@@ -2854,6 +2959,12 @@ private:
                     continue;
                 }
                 again = true;
+                continue;
+            }
+            // A record re-created at another sheet scale is other art: native until /tfont on reads it afresh.
+            if (f.scale != s.s) {
+                dropRecord(s, fmt("its new record is a %dx sheet, not the %dx one read at this install", f.scale, s.s));
+                s.artNative = true;
                 continue;
             }
             // Validate replacement art before adopting the new record; retain the old one for restoration if it holds ours.
@@ -3054,6 +3165,7 @@ private:
     unsigned long maxTexW_ = 0, maxTexH_ = 0;
     bool nonPow2_ = true;              // the card takes a texture that is no power of two (D3DPTEXTURECAPS_POW2 clear)
     std::string kSaid_;                // Last Sharpness warning; suppress duplicates.
+    std::string raisedSaid_;           // the last ks raised to a scaled sheet's (logged once per outcome)
     const char* poolOf_ = "-";
     TexFormat formatOf_ = TexFormat::A8R8G8B8;
     FormatSupport formats_;

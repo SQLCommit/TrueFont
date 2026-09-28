@@ -50,7 +50,8 @@ inline const char* groupKey(Group g) {
 enum class SpriteRec : uint8_t { FontFont = 0, Menu2fon, Mn10font, News };
 inline constexpr int kSpriteRecCount = 4;
 struct SpriteRecInfo { const char* name; uint16_t w, h; const char* shortName; };
-// The records TrueFont replaces: name, the +24/+26 size they must report (51.DAT's sizes). news is DXT3 (peak alpha 88h).
+// The records TrueFont replaces: name, the +24/+26 size they must report (51.DAT's sizes; a scaled sheet reports 2x or 4x
+// it). news is DXT3 (peak alpha 88h).
 inline constexpr SpriteRecInfo kSpriteRecs[kSpriteRecCount] = {
     {"font    font    ", 256, 256, "font font"},
     {"menu    menu2fon", 256, 256, "menu2fon"},
@@ -79,6 +80,28 @@ struct Rect {
         return fromEdges(std::min<int>(u, o.u), std::min<int>(v, o.v), std::max(x1(), o.x1()), std::max(y1(), o.y1()));
     }
 };
+
+// A scaled letter sheet: its texture and every rect the game samples it with are s times a table's (s = 1, 2 or 4). The
+// game samples at rect / (+24, +26), so the UVs, and the layout, are the table's.
+inline constexpr int kSheetScales[] = {1, 2, 4};
+// The scale s with w x h == s * (tw x th), the same both ways; 0 when there is none.
+inline int sheetScale(int w, int h, int tw, int th) {
+    for (const int s : kSheetScales)
+        if (w == s * tw && h == s * th) return s;
+    return 0;
+}
+// A rect of an s-times sheet in the table's units. `exact` false (and the rect empty) when a field does not divide by s:
+// the rect is off the sheet's grid.
+inline Rect scaledDown(const Rect& r, int s, bool& exact) {
+    exact = s >= 1 && r.u % s == 0 && r.v % s == 0 && r.w % s == 0 && r.h % s == 0;
+    if (!exact) return Rect{};
+    Rect o;
+    o.u = int16_t(r.u / s);
+    o.v = int16_t(r.v / s);
+    o.w = int16_t(r.w / s);
+    o.h = int16_t(r.h / s);
+    return o;
+}
 
 struct FontEntry {
     int16_t u, v, w, h;
@@ -487,17 +510,18 @@ inline std::vector<GlyphSlot> slotsFor(SpriteRec rec, TableSet ts = TableSet::En
 
 // The texture pin: FNV-1a over the alpha nibble of the native texels in every owned glyph's union (outside = 0). The
 // nibble is what DXT3 stores, so the pin holds for a DXT3 read (a*17) and for an A8R8G8B8 expansion (a*17 or a<<4).
-inline uint32_t texturePinOf(const std::vector<GlyphSlot>& slots, const uint32_t* px, int w, int h) {
+// `scale`: the sheet's (every texel of `scale` times each union is read).
+inline uint32_t texturePinOf(const std::vector<GlyphSlot>& slots, const uint32_t* px, int w, int h, int scale = 1) {
     uint32_t hsh = 2166136261u;
     for (const GlyphSlot& s : slots)
-        for (int y = s.uni.v; y < s.uni.y1(); y++)
-            for (int x = s.uni.u; x < s.uni.x1(); x++) {
+        for (int y = s.uni.v * scale; y < s.uni.y1() * scale; y++)
+            for (int x = s.uni.u * scale; x < s.uni.x1() * scale; x++) {
                 const uint8_t a = (px && x >= 0 && y >= 0 && x < w && y < h) ? uint8_t(px[size_t(y) * size_t(w) + size_t(x)] >> 28) : uint8_t(0);
                 hsh = fnv1a(hsh, &a, 1);
             }
     return hsh;
 }
-inline uint32_t texturePin(SpriteRec rec, const uint32_t* px, int w, int h, TableSet ts = TableSet::English) { return texturePinOf(slotsFor(rec, ts), px, w, h); }
+inline uint32_t texturePin(SpriteRec rec, const uint32_t* px, int w, int h, TableSet ts = TableSet::English, int scale = 1) { return texturePinOf(slotsFor(rec, ts), px, w, h, scale); }
 
 // The run-time check: the live leaf rects of a record against the shipped table.
 struct RectCheck {
@@ -556,6 +580,40 @@ inline bool rectKnown(SpriteRec rec, const Rect& r, TableSet ts = TableSet::Engl
     for (const Rect& a : areas[int(ts)][int(rec)])
         if (r.overlaps(a)) return false;
     return true;
+}
+
+// The live rects of an s-times sheet that are off its grid (a field does not divide by s), sorted by what they read.
+// TrueFont writes only inside s times each owned glyph's union; every other texel is the sheet's own, copied as whole
+// k/s-texel blocks, so a rect there reads the same texels as it does without TrueFont.
+//  clear:    inside the sheet and touching no owned union.
+//  unscaled: one of the table's rects as it stands: a sprite set the mod left at the unscaled layout (the game's own
+//            copy of a set in a DAT the mod does not replace). On the scaled sheet it lands among the mod's letters at
+//            1/s of the place it means and reads a piece of other letters with or without TrueFont: TrueFont changes
+//            which letter pixels it gets, never a picture that was right.
+//  refused:  anything else over an owned union: a leaf of the sheet's own layout reading letter texels off the grid,
+//            so the letters are not where the table's layout scaled puts them.
+struct OffGridCheck {
+    std::vector<Rect> clear, unscaled, refused;
+    bool ok() const { return refused.empty(); }
+};
+inline OffGridCheck checkOffGrid(SpriteRec rec, const std::vector<Rect>& off, int s, TableSet ts = TableSet::English) {
+    OffGridCheck c;
+    if (off.empty()) return c;
+    const RecordTable t = tableFor(rec, ts);
+    const SpriteRecInfo& in = kSpriteRecs[int(rec)];
+    const Rect sheet = Rect::fromEdges(0, 0, int(in.w) * s, int(in.h) * s);
+    std::vector<Rect> areas;
+    for (const GlyphSlot& g : slotsFor(rec, ts)) areas.push_back(Rect::fromEdges(g.uni.u * s, g.uni.v * s, g.uni.x1() * s, g.uni.y1() * s));
+    for (const Rect& r : off) {
+        bool touches = false;
+        for (const Rect& a : areas)
+            if (r.overlaps(a)) { touches = true; break; }
+        if (!touches && sheet.contains(r)) { c.clear.push_back(r); continue; }
+        bool inTable = false;
+        for (size_t i = 0; i < t.n && !inTable; i++) inTable = t.e[i].rect() == r;
+        (inTable ? c.unscaled : c.refused).push_back(r);
+    }
+    return c;
 }
 
 }  // namespace tf

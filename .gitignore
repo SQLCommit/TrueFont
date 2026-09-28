@@ -11,6 +11,10 @@ dist/
 # Client dumps for the signature tests (never published)
 dumps/
 *.bin
+# Game DATs for the local mod checks (never published)
+testdata/
+*.DAT
+*.dat
 # Local runs of the release scripts
 /.ashita/
 # Editors and OS

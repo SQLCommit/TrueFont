@@ -652,6 +652,20 @@ inline DetailState detailState(Group grp, bool off, bool available, bool groupOn
 // The line under a not-available group's note on the Nameplates and Damage numbers tabs, while Aspect and Size can work.
 inline constexpr const char* kShapeStillNote = "Aspect and Size still work.";
 inline const char* unavailableShapeNote(Group grp, int shape) { return hasShape(grp) && shape == 0 ? kShapeStillNote : ""; }
+// A not-available group's note (the language's is the panel's own): its letters changed this session, a font mod's letter
+// layout TrueFont does not recognise (on a game version it knows), or the game version.
+inline constexpr const char* kModLayoutNote = "TrueFont doesn't recognise this font mod's letter layout, so this group keeps the mod's look. See the log.";
+inline const char* unavailableNote(bool replaced, bool modLayout, int unknownClient) {
+    return replaced ? "Its letters changed during this session, so it keeps the game's own look; /tfont on takes them as they are now."
+         : unknownClient == 1 ? "This game version is newer than TrueFont knows: this group keeps the game's own look. See the log."
+         : unknownClient == 2 ? "This game version is not one TrueFont knows: this group keeps the game's own look. See the log."
+         : modLayout          ? kModLayoutNote
+                              : "Not available on this game version: this group keeps the game's own look. See the log.";
+}
+// A menu or HUD font group's client-version value for its note (0 known, 1 newer, 2 other): the version's when the menu and
+// HUD fonts did not resolve, or when the group's record keeps its look for its letter layout. On a game version TrueFont
+// does not know, a changed layout is as likely the game's update as a font mod's, so the version note says it.
+inline int spriteGroupUnknownClient(bool spritesResolved, bool modLayout, int unknownClient) { return !spritesResolved || modLayout ? unknownClient : 0; }
 // /tfont on retries failed sprite records; rebuild does not revalidate them.
 inline constexpr const char* kGroupFailedNote = "Could not be built; /tfont on tries again. See the log.";
 // /tfont reset's reply. The defaults switch every font group off (defaultGroup), so the game's own fonts come back.

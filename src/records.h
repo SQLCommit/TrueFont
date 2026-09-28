@@ -42,6 +42,8 @@ struct RecordFind {
     int skippedHits = 0;        // records with the name the lookup skips
     TexRecord first;            // the first live hit
     bool valid = false;         // exactly one hit, and it validated
+    int scale = 0;              // valid: its sheet's scale (fonttables.h sheetScale: 1, 2 or 4)
+    bool sizeRefused = false;   // not valid for its +24/+26 alone (no scale of the table's size)
     std::string why;            // why not valid
 };
 
@@ -53,13 +55,23 @@ struct CacheScan {
     RecordFind ustatshd;        // logged only
 };
 
-// Validate identity and dimensions; installers must recheck before writing.
-inline bool validateRecord(const TexRecord& t, uint32_t vtableVA, const char* name, uint16_t w, uint16_t h, std::string& why) {
-    char b[160];
+// Validate identity and dimensions; installers must recheck before writing. +24/+26 may be the tables' size or a scaled
+// sheet's (2x, 4x): `scale` gets which, `sizeWrong` whether the size alone refused it.
+inline bool validateRecord(const TexRecord& t, uint32_t vtableVA, const char* name, uint16_t w, uint16_t h, std::string& why, int* scale = nullptr, bool* sizeWrong = nullptr) {
+    char b[200];
+    if (scale) *scale = 0;
+    if (sizeWrong) *sizeWrong = false;
     if (!vtableVA || t.vtable != vtableVA) { _snprintf_s(b, sizeof b, _TRUNCATE, "record %08X: vtable %08X is not CYyTex's %08X", unsigned(t.rec), t.vtable, vtableVA); why = b; return false; }
     if (std::memcmp(t.name, name, 16) != 0) { _snprintf_s(b, sizeof b, _TRUNCATE, "record %08X: name \"%.16s\" is not \"%.16s\"", unsigned(t.rec), t.name, name); why = b; return false; }
-    if (t.w != w || t.h != h) { _snprintf_s(b, sizeof b, _TRUNCATE, "record %08X: +24/+26 %ux%u, not the %ux%u the tables are for", unsigned(t.rec), t.w, t.h, w, h); why = b; return false; }
+    const int s = sheetScale(t.w, t.h, w, h);
+    if (!s) {
+        _snprintf_s(b, sizeof b, _TRUNCATE, "record %08X: +24/+26 %ux%u, not the %ux%u the tables are for (nor 2x or 4x it, the same both ways)", unsigned(t.rec), t.w, t.h, w, h);
+        why = b;
+        if (sizeWrong) *sizeWrong = true;
+        return false;
+    }
     if (t.tex40 < 0x10000) { _snprintf_s(b, sizeof b, _TRUNCATE, "record %08X: +40 holds no texture (%08X)", unsigned(t.rec), unsigned(t.tex40)); why = b; return false; }
+    if (scale) *scale = s;
     return true;
 }
 
@@ -105,7 +117,7 @@ inline bool scanCache(const MemReader& m, uintptr_t cacheGlobal, uint32_t vtable
         RecordFind* f = i < kSpriteRecCount ? &s.rec[i] : &s.ustatshd;
         if (s.fault || s.limitHit) { f->why = s.fault ? "the texture cache list could not be read" : "the texture cache list did not end (limit reached)"; continue; }
         if (f->hits != 1) { f->why = f->hits ? std::to_string(f->hits) + " records have the name (want 1)" : "not in the texture cache"; continue; }
-        f->valid = validateRecord(f->first, vtableVA, f->name, f->wantW, f->wantH, f->why);
+        f->valid = validateRecord(f->first, vtableVA, f->name, f->wantW, f->wantH, f->why, &f->scale, &f->sizeRefused);
     }
     return !s.fault && !s.limitHit;
 }
@@ -117,8 +129,10 @@ inline std::string describe(const RecordFind& f, uintptr_t imageBase) {
         return b;
     }
     const TexRecord& t = f.first;
-    _snprintf_s(b, sizeof b, _TRUNCATE, "record \"%.16s\": hits %d (skipped %d), %08X vtable RVA %06X, +24/+26 %ux%u, +2A %u, +2C %08X, +40 %08X, +44 %08X: %s", f.name, f.hits, f.skippedHits,
-                unsigned(t.rec), unsigned(t.vtable - imageBase), t.w, t.h, t.b2A, t.flags, unsigned(t.tex40), unsigned(t.tex44), f.valid ? "valid" : f.why.c_str());
+    char scaled[40] = "";
+    if (f.valid && f.scale > 1) _snprintf_s(scaled, sizeof scaled, _TRUNCATE, " (a %dx scaled sheet)", f.scale);
+    _snprintf_s(b, sizeof b, _TRUNCATE, "record \"%.16s\": hits %d (skipped %d), %08X vtable RVA %06X, +24/+26 %ux%u, +2A %u, +2C %08X, +40 %08X, +44 %08X: %s%s", f.name, f.hits, f.skippedHits,
+                unsigned(t.rec), unsigned(t.vtable - imageBase), t.w, t.h, t.b2A, t.flags, unsigned(t.tex40), unsigned(t.tex44), f.valid ? "valid" : f.why.c_str(), scaled);
     return b;
 }
 

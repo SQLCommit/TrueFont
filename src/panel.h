@@ -27,6 +27,7 @@ struct GroupView {
     bool missing = false;           // its own font is not installed
     bool available = true;          // false: its textures do not match this game version
     bool replaced = false;   // Recreated record with different art; /tfont on revalidates.
+    bool modLayout = false;   // Its record's letter layout (a DAT mod's) is not one TrueFont recognises.
     bool failed = false;   // Build or installation failed.
     bool restart = false;   // Earlier TrueFont texture still referenced.
     int unknownClient = 0;   // Unrecognized client: 1=newer, 2=other.
@@ -631,10 +632,7 @@ private:
         disabledText(groupCopy(grp).tip);
         if (!gv.available) {
             disabledText(!gv.language.empty() ? (gv.language + " menus aren't supported yet: this group keeps the game's own look.").c_str()
-                         : gv.replaced        ? "Its letters changed during this session, so it keeps the game's own look; /tfont on takes them as they are now."
-                         : gv.unknownClient == 1 ? "This game version is newer than TrueFont knows: this group keeps the game's own look. See the log."
-                         : gv.unknownClient == 2 ? "This game version is not one TrueFont knows: this group keeps the game's own look. See the log."
-                                                 : "Not available on this game version: this group keeps the game's own look. See the log.");
+                                              : unavailableNote(gv.replaced, gv.modLayout, gv.unknownClient));
             if (const char* still = unavailableShapeNote(grp, gv.shape); *still) disabledText(still);   // Aspect and Size do not need the font
         } else {
             // A group that is off has no note of its own (the box says it); one that is on says when it is down.
