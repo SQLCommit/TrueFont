@@ -111,14 +111,14 @@ Each group's **Sharpness** offers Auto, 2×, 3× or 4×.
 
 | Group | Auto setting |
 | :--- | :--- |
-| **Chat/Items** | 16 px cells, or 32 px with FFXI's high-resolution font |
+| **Chat/Items** | 16 px cells, or the size of FFXI's high-resolution font (32 px, or 16 px on cards limited to 2048×2048 textures) |
 | **Nameplates / Damage** | Adapts to the window, rendering resolution, Aspect and Size; waits three seconds after a size change |
 | **Other groups** | 2× |
 
 Higher settings use more memory. TrueFont limits its font texture and rebuild budget to **160 MB**, reduces sharpness when needed, and shows unavailable choices in the panel. Chat/Items at 4× requires **Compress**; 4× with a Japanese Font exceeds the budget. On hardware that cannot use 3× textures, TrueFont uses 2×.
 
 - **Compress** (Settings > Quality): Halves texture memory, with slightly softer edges. Off by default.
-- **Keep Original** (Chat/Items > Detail): Keeps a copy of the game's chat font for rebuilding missing characters. On by default; turning it off saves 8 MB, or 16 MB with the high-resolution font, at the cost of slower rebuilds.
+- **Keep Original** (Chat/Items > Detail): Keeps a copy of the game's chat font for rebuilding missing characters. On by default; turning it off saves 8 MB, or 16 MB with the 32 px high-resolution font, at the cost of slower rebuilds.
 
 </dd>
 </dl>

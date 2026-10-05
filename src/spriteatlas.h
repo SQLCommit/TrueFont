@@ -27,6 +27,8 @@
 namespace tf {
 
 enum class Outline : uint8_t { Off = 0, Thin, Thick };
+// fontshp letters: 19 to 9
+inline constexpr double kPlateLetterScale = 9.0 / 19.0;
 
 struct GroupStyle {
     std::wstring family;
@@ -568,10 +570,11 @@ inline bool buildSpriteAtlas(SpriteRec rec, const std::vector<GlyphSlot>& slots,
         return it->second;
     };
     // Each class's common horizontal factor (the median of what its glyphs need at their natural width).
-    double classCondense[kGroupCount][4];
+    double classCondense[kGroupCount][4], plainCondense[kGroupCount][4];   // plain: without shadow
     for (auto& row : classCondense) for (double& v : row) v = 1.0;
+    for (auto& row : plainCondense) for (double& v : row) v = 1.0;
     if (o.mode == SpriteOptions::Mode::Normal) {
-        std::vector<double> need[kGroupCount][4];
+        std::vector<double> need[kGroupCount][4], plain[kGroupCount][4];
         const auto addNeed = [&](const GlyphSlot& s, int g) {
             const GroupStyle& st = o.style[g];
             const GlyphFace* face = faceFor(g, int(s.group), s.cls);
@@ -581,6 +584,7 @@ inline bool buildSpriteAtlas(SpriteRec rec, const std::vector<GlyphSlot>& slots,
             const int bold = st.fauxBold ? k : 0, rim = st.outline == Outline::Off ? 0 : st.outline == Outline::Thin ? k : 2 * k;
             const int room = s.fit.w * k - bold - 2 * rim - (st.shadow ? shadowReach(k) : 0);
             need[g][s.cls].push_back(std::min(1.0, double(std::max(1, room)) / double(run.w)));
+            plain[g][s.cls].push_back(std::min(1.0, double(std::max(1, s.fit.w * k - bold - 2 * rim)) / double(run.w)));
         };
         for (size_t i = 0; i < slots.size(); i++) {
             if (ink[i].empty()) continue;
@@ -596,6 +600,8 @@ inline bool buildSpriteAtlas(SpriteRec rec, const std::vector<GlyphSlot>& slots,
                     std::sort(need[g][c].begin(), need[g][c].end());
                     classCondense[g][c] = need[g][c][need[g][c].size() / 2];
                     a.group[g].cls[c].condense = classCondense[g][c];
+                    std::sort(plain[g][c].begin(), plain[g][c].end());
+                    plainCondense[g][c] = plain[g][c][plain[g][c].size() / 2];
                 }
     }
 
@@ -619,6 +625,28 @@ inline bool buildSpriteAtlas(SpriteRec rec, const std::vector<GlyphSlot>& slots,
         else rowBase[i] = slots[i].safe.y1() * k - int(std::lround(commonShare(share, 0.5 / hMax) * slots[i].safe.h * k));
     }
     const auto rimOf = [&](const GroupStyle& st) { return st.outline == Outline::Off ? 0 : st.outline == Outline::Thin ? k : 2 * k; };
+    // Lift damage rows for rim
+    if (o.mode == SpriteOptions::Mode::Normal) {
+        std::vector<int> shortfall(slots.size(), 0);
+        for (size_t j = 0; j < slots.size(); j++) {
+            const GlyphSlot& s = slots[j];
+            if (!active[j] || ink[j].empty() || !stretchedRows(s.group) || !flatText(s.text)) continue;
+            const int dg = int(drawGroup(s, o));
+            const GlyphFace* face = faceFor(dg, int(s.group), s.cls);
+            if (!face) continue;
+            const Run& run = raster(*face, drawnText(s.text, *face), classCondense[dg][s.cls], vScale[j]);
+            if (run.error || run.missing || run.w <= 0) continue;
+            const int under = rimOf(o.style[dg]) + (o.style[dg].shadow ? shadowReach(k) : 0) + coreBelow(run);
+            shortfall[j] = std::max(0, under - (s.fit.y1() * k - rowBase[j]));
+        }
+        for (size_t i = 0; i < slots.size(); i++) {
+            if (ink[i].empty() || !stretchedRows(slots[i].group)) continue;
+            int lift = 0;
+            for (size_t j = 0; j < slots.size(); j++)
+                if (slots[j].group == slots[i].group && slots[j].cls == slots[i].cls) lift = std::max(lift, shortfall[j]);   // one screen line
+            rowBase[i] -= std::min(lift, std::max(0, rowBase[i] - slots[i].fit.v * k - 2 * k));
+        }
+    }
     // The top of the rows over each slot's fit box that only its own union covers (k-space): its rim may go there.
     std::vector<int> rimTop(slots.size(), 0);
     for (size_t i = 0; i < slots.size(); i++) {
@@ -767,17 +795,28 @@ inline bool buildSpriteAtlas(SpriteRec rec, const std::vector<GlyphSlot>& slots,
         const auto fitsAbove = [&](const Run& r, const Ink& g) { return g.asc <= roomRim && coreAbove(r) <= roomAbove; };
         const int centreK2 = (ink[i].u + ink[i].x1()) * k;   // twice the centre, in k-space
         const int bold = st.fauxBold ? k : 0;
-        const int sOff = st.shadow ? shadowOffset(k) : 0, sBlur = st.shadow ? shadowBlur(k) : 0, ext = st.shadow ? shadowReach(k) : 0;
+        const bool scaled = o.plateMarks && s.plateMark;   // drawn 1:1 beside letters
+        const auto drawnAt = [&](int v) { return v > 0 && scaled ? std::max(1, int(std::lround(v * kPlateLetterScale))) : v; };
+        int sOff = drawnAt(st.shadow ? shadowOffset(k) : 0), sBlur = drawnAt(st.shadow ? shadowBlur(k) : 0), ext = sOff + sBlur;
+        const bool mark = s.text.size() == 1 && !isAlnum(s.text[0]) && !s.word();
         const auto shared = lineSqueeze.find(lineKey(s) * 4 + xMember[i]);
         const double lineSq = xMember[i] && shared != lineSqueeze.end() ? shared->second : 1.0;
         // A thinner outline when the fit box is too small for this one.
-        int rim = rimOf(st);
+        int rim = drawnAt(rimOf(st));
+        const int thinRim = drawnAt(st.outline == Outline::Off ? 0 : k);
+        const auto thinner = [&](int r) { return !scaled ? r - k : r > thinRim ? thinRim : 0; };
+        const bool widen = scaled && mark && rim < rimOf(st);
         Ink out;
         Run used;
         int onLine = -1;   // decided on the first raster (a mark whose ink stays clear of the baseline is not)
         const bool flatLine = flatText(s.text) && rowKnown[i] && roomAbove > 0 && roomBelow >= 0;
         for (;;) {
-            double condense = classCondense[dg][s.cls], squeeze = lineSq * vScale[i];   // a stretched row's scale
+            double condense = st.shadow && !ext ? plainCondense[dg][s.cls] : classCondense[dg][s.cls], squeeze = lineSq * vScale[i];   // a stretched row's scale
+            const auto regrow = [&](int w) { condense = std::min(1.0, condense * double(std::max(1, F.w - bold - 2 * rim - ext)) / double(std::max(1, w))); };   // widen to the box
+            if (widen) {
+                const Run& nr = raster(*face, text, 1.0, squeeze);
+                if (!nr.error && !nr.missing && nr.w > 0) condense = std::max(condense, std::min(1.0, double(std::max(1, F.w - bold - 2 * rim - ext)) / double(nr.w)));
+            }
             for (int pass = 0; pass < 5; pass++) {
                 Run run = anchored(*face, text, condense, squeeze, classCondense[dg][s.cls], vScale[i], flatLine);
                 if (run.error) { res.outcome = SlotOutcome::Error; break; }
@@ -789,11 +828,27 @@ inline bool buildSpriteAtlas(SpriteRec rec, const std::vector<GlyphSlot>& slots,
                     const int cb = coreBelow(run);
                     if (cb > 0 && (s.word() || isAlnum(s.text[0]))) run.asc += cb;
                     else if (cb > 0) onLine = 0;
+                } else if (onLine == 1 && (s.text == L"," || s.text == L";")) {
+                    const int cb = coreBelow(run);
+                    if (cb > 0 && cb + rim + ext > roomBelow) onLine = 0;   // tail cannot fit: isolate
                 }
                 out = makeInk(run, bold, rim, sOff, sBlur);
                 used = std::move(run);
                 res.outcome = SlotOutcome::Rendered;
                 const bool wide = out.w > F.w, tall = onLine ? !fitsAbove(used, out) : out.h > F.h;
+                if (mark && ((tall && ink[i].h <= 2) || (wide && ink[i].w <= 2)) && (ext > 0 || rim > 0)) {   // tiny mark: shadow, rim first
+                    const double fw = double(std::max(1, F.w - bold - 2 * rim - ext)) / double(std::max(1, used.w));
+                    const double fh = onLine ? std::min(double(std::max(1, roomRim - rim)) / double(std::max(1, used.asc)), double(std::max(1, roomAbove)) / double(std::max(1, coreAbove(used))))
+                                             : double(std::max(1, F.h - 2 * rim - ext)) / double(std::max(1, used.h));
+                    const double f = std::min(wide && ink[i].w <= 2 ? fw : 1.0, tall && ink[i].h <= 2 ? fh : 1.0);
+                    if (ext > 0 || f < 0.5) {   // rim only when halved
+                        if (ext > 0) { sOff = sBlur = ext = 0; condense = std::max(condense, plainCondense[dg][s.cls]); }
+                        else { rim = thinner(rim); regrow(used.w); }
+                        --pass;
+                        continue;
+                    }
+                }
+                if (rim > k && (s.text == L"," || s.text == L";") && used.w <= 2 * rim) { rim = thinner(rim); regrow(used.w); --pass; continue; }   // stroke under outline: thinner
                 if ((!wide && !tall) || pass == 4) break;
                 const double shave = pass == 0 ? 1.0 : 0.97;
                 if (wide) { condense *= double(std::max(1, F.w - bold - 2 * rim - ext)) / double(std::max(1, used.w)) * shave; res.condensed = true; }
@@ -804,7 +859,7 @@ inline bool buildSpriteAtlas(SpriteRec rec, const std::vector<GlyphSlot>& slots,
                 else if (tall) { squeeze *= double(std::max(1, F.h - 2 * rim - ext)) / double(std::max(1, used.h)) * shave; res.squeezed = true; }
             }
             if (res.outcome != SlotOutcome::Rendered || rim == 0 || (out.w <= F.w && (onLine ? fitsAbove(used, out) : out.h <= F.h))) break;
-            rim -= k;
+            rim = thinner(rim);
         }
         if (lineSq < 1.0) res.squeezed = true;
         if (res.outcome == SlotOutcome::Error || res.outcome == SlotOutcome::NoGlyph) {
@@ -865,6 +920,8 @@ inline bool buildSpriteAtlas(SpriteRec rec, const std::vector<GlyphSlot>& slots,
                 if (c) { cx0 = std::min(cx0, X); cy0 = std::min(cy0, Y); cx1 = std::max(cx1, X + 1); cy1 = std::max(cy1, Y + 1); }
             }
         if (cx1 >= 0) res.core = Rect::fromEdges(cx0, cy0, cx1, cy1);
+        if (o.plateMarks && s.plateMark && p.onLine && cx1 >= 0)   // only rows its rim reaches
+            res.box = Rect::fromEdges(F.u, std::max(topK, std::min<int>(F.v, cy0 - p.rim)), F.x1(), F.y1());
         ++gs.rendered;
         if (res.condensed) ++gs.condensed;
         if (res.squeezed) ++gs.squeezed;

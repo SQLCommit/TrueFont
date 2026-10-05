@@ -1,6 +1,6 @@
 // Chat/menu atlas installation through CYyTex+40; render thread only except DataOnly release.
 // The worker builds copied inputs, and the render thread uploads and swaps complete textures.
-// One atlas serves moji and high through normalized UVs; active font high requires at least 32 px cells.
+// One atlas: moji, high.
 // Keep one owning texture reference plus one per installed record. Never release an unowned texture.
 // Preserve foreign replacements as originals; stop reapplying after sustained contention.
 // Hardware limits, rebuild memory and free address-space blocks constrain Sharpness.
@@ -123,7 +123,7 @@ struct ChatBudget {
     bool nonPow2 = true;
     TexFormat plain = TexFormat::A8L8, packed = TexFormat::Dxt3;   // the upload format without and with Compress
     bool compress = false;
-    bool high = false;                  // the game's high-resolution font is active (32 px at least)
+    int highCell = 0;                   // high font cell (0: off)
     uint64_t readback = 8ull << 20;     // the copy of the game's font a build holds
     uint64_t cells = 256;               // the cells a build draws (its kept shapes)
     uint64_t latinCells = 256;          // ... with the Japanese Font Off
@@ -142,13 +142,20 @@ struct ChatFit {
 };
 inline ChatFit fitChat(const ChatBudget& b, int wantCell) {
     ChatFit r;
-    r.want = b.high ? (std::max)(32, wantCell) : wantCell;
+    r.want = (std::max)(b.highCell, wantCell);
     r.cell = fitChatCell(r.want, b.maxW, b.maxH, b.nonPow2, b.format(), b.readback, b.cells, r.why, b.others, &r.limit);
     if (b.cap && r.cell > b.cap) {
         r.cell = b.cap;
         if (r.limit == ChatLimit::None) r.limit = ChatLimit::Session;
     }
-    if (b.high) r.cell = (std::max)(32, r.cell);
+    if (b.highCell > r.cell) {   // only if the card fits
+        const unsigned long w = static_cast<unsigned long>(kGridCols * b.highCell), h = static_cast<unsigned long>(kGridRows * b.highCell);
+        if (!b.maxW || (w <= b.maxW && h <= b.maxH)) r.cell = b.highCell;
+        else {
+            r.limit = ChatLimit::Card;
+            if (r.why.empty()) r.why = fmt("%d px cells need a %lu x %lu texture; this card's largest is %lu x %lu", b.highCell, w, h, b.maxW, b.maxH);
+        }
+    }
     r.peak = chatPeak(r.want, b.format(), b.readback, b.cells, b.others);
     return r;
 }
@@ -176,7 +183,7 @@ inline std::string chatSharpDenied(const ChatBudget& b, int sharp) {
         if (noOthers) x2.others = 0;
         return fitChat(x2, chatCellFor(sharp)).fits();
     };
-    const bool hi = b.high && b.readback > (8ull << 20), jp = b.cells > b.latinCells, ot = b.others > 0;
+    const bool hi = b.highCell > 16 && b.readback > (8ull << 20), jp = b.cells > b.latinCells, ot = b.others > 0;
     std::string ctx;
     if (fitsWith(hi, jp, ot)) {
         const char* names[3] = {"the game's high-resolution font on", "a Japanese Font", "the other groups' fonts"};
@@ -210,9 +217,10 @@ inline std::string chatSharpTip(const ChatBudget& b) {
     p.compress = false;
     z.compress = true;
     const auto mb = [](const ChatBudget& x, int sharp) { return mbUp(fitChat(x, chatCellFor(sharp)).peak.total()); };
-    return fmt("How much detail each character is drawn with. Auto: 16 px (32 px with the game's high-resolution font); 2x, 3x and 4x are 32, 48 and 64 px. While Chat/Items "
+    return fmt("How much detail each character is drawn with. Auto: 16 px (%s); 2x, 3x and 4x are 32, 48 and 64 px. While Chat/Items "
                "builds, TrueFont holds about %d, %d, %d and %d MB here (%d, %d, %d and %d MB with Compress), the other groups' fonts included; its limit is %d MB, so a "
                "Sharpness that would pass it is greyed. Chat/Items is also limited by the game's Menu Resolution: set it to your screen size.",
+               b.highCell > 16 ? fmt("%d px while the game's high-resolution font is on", b.highCell).c_str() : "up to 32 px with the game's high-resolution font, as the card allows",
                mb(p, 0), mb(p, 2), mb(p, 3), mb(p, 4), mb(z, 0), mb(z, 2), mb(z, 3), mb(z, 4), mbUp(kMemoryLimit));
 }
 // Large textures need contiguous address space even when total free memory is sufficient.
@@ -535,7 +543,7 @@ public:
     bool heavyThisFrame() const { return frame_ && heavyFrame_ == frame_; }
     // A refusal that logging in again may clear (not the card's limits or the game's records).
     bool failureRetriableAtLogin() const { return !failure_.empty() && !failurePersistent_; }
-    // The cell size built (at least 32 while the font high record is active; the largest that fits).
+    // Cell built, card permitting.
     int effectiveCell() const { return cellFor(opts_.cell); }
     int cellFor(int want) const { return fitChat(budget(), want).cell; }
     // Current inputs for the shared Sharpness calculation.
@@ -547,7 +555,7 @@ public:
         b.plain = formats_.expected(false);
         b.packed = formats_.expected(true);
         b.compress = opts_.compress;
-        b.high = highActive_;
+        b.highCell = highActive_ ? highCell_ : 0;
         b.readback = originalBytes();
         b.cells = shapeCells();
         b.latinCells = shapeCells(false);
@@ -586,6 +594,7 @@ public:
     // Reserve the chat rebuild peak from the shared sprite budget.
     uint64_t budgetBytes() const { return peakAt(effectiveCell()).own(); }
     bool highActive() const { return highActive_; }
+    int highMin() const { return highActive_ ? highCell_ : 16; }   // font high's smallest cell
     const AtlasStats& stats() const { return stats_; }
     int builtCell() const { return builtCell_; }
     bool building() const { return building_ || upload_; }
@@ -609,8 +618,8 @@ public:
     int textureHeight() const { return ours_ ? oursH_ : 0; }
     const FormatSupport& formats() const { return formats_; }
     uint64_t textureBytes() const { return ours_ ? uint64_t(texBytes(oursFormat_, oursW_, oursH_)) : 0; }
-    // The readback's bytes: the kept one's, else the last one's, else the usual (8 MB, or 16 MB for the grey high font).
-    uint64_t originalBytes() const { return rb_ ? uint64_t(rb_->bytes()) : rbBytes_ ? rbBytes_ : highActive_ ? 16ull << 20 : 8ull << 20; }
+    // Readback bytes, else estimate.
+    uint64_t originalBytes() const { return rb_ ? uint64_t(rb_->bytes()) : rbBytes_ ? rbBytes_ : highActive_ && highCell_ >= 32 ? 16ull << 20 : 8ull << 20; }
     // The copy of the game's font held now: the readback, and a copy waiting for the next build to decode.
     uint64_t keptBytes() const { return (rb_ ? uint64_t(rb_->bytes()) : 0) + (raw_ ? uint64_t(raw_->bytes.size()) : 0); }
     uint64_t shapesBytes() const { return shapes_ ? uint64_t(shapes_->bytes()) : 0; }
@@ -947,7 +956,7 @@ private:
 
     // A cell size below the one Sharpness asks for: the reason in the log each build, one chat line per outcome.
     void sayCellShortfall(int got) {
-        const int want = highActive_ ? (std::max)(32, opts_.cell) : opts_.cell;
+        const int want = (std::max)(highMin(), opts_.cell);
         if (got >= want) { cellSaid_.clear(); return; }
         std::string why = fitChat(budget(), want).why;
         if (why.empty()) why = capWhy_;
@@ -1028,10 +1037,10 @@ private:
             info(fmt("keep: font high: its texture is copied; rebuilding at %d px cells from it (I11)", effectiveCell()));
         }
     }
-    // Retry a failed allocation at the next smaller cell, never below 32 px while font high is active.
+    // Retry smaller, not below high.
     bool stepDown(int cell, const std::string& why) {
         const int lower = nextCellDown(cell, nonPow2_);
-        if (!enabled_ || gameGone_ || !lower || (highActive_ && lower < 32)) return false;
+        if (!enabled_ || gameGone_ || !lower || lower < highMin()) return false;
         cellCap_ = cellCap_ ? (std::min)(cellCap_, lower) : lower;
         capWhy_ = fmt("a %d px atlas could not be made (%s)", cell, why.c_str());
         warn("build: " + capWhy_ + fmt("; building at %d px instead (I16)", cellCap_));
@@ -1186,6 +1195,7 @@ private:
             return;
         }
         highActive_ = true;
+        readHighCell(renderer);
         if (defer) {
             if (!raw_ && hd.Width == 2048) highCopyPending_ = true;
             info(fmt("font high is active (renderer +80 = 1): the atlas is built at %d px cells (I11); its texture is copied once a buffer is made off the render thread",
@@ -1203,6 +1213,13 @@ private:
         }
     }
 
+    // The game's own high cell.
+    void readHighCell(uintptr_t renderer) {
+        const uintptr_t t = originalTexture(high_, currentHigh(renderer), kHighName);
+        D3DSURFACE_DESC d{};
+        std::string why;
+        if (t && describe(t, d, why)) highCell_ = (std::max)(16, gridCell(d.Width, d.Height));
+    }
     // Predict the next copy size for buffer preparation; a wrong estimate falls back to direct allocation.
     size_t nextCopyBytes() const {
         const uintptr_t renderer = liveRenderer();
@@ -1416,7 +1433,7 @@ private:
             const uint64_t tex = uint64_t(texBytes(f, kGridCols * o.cell, kGridRows * o.cell)), free = largestFreeFn ? largestFreeFn() : 0;
             if (free >= 2 * tex) break;
             const int lower = nextCellDown(o.cell, nonPow2_);
-            if (!lower || (highActive_ && lower < 32)) break;
+            if (!lower || lower < highMin()) break;
             cellCap_ = cellCap_ ? (std::min)(cellCap_, lower) : lower;
             capWhy_ = fmt("a %d px build needs a free block of %.0f MB of address space (twice its texture); the largest is %.0f MB", o.cell, double(2 * tex) / 1048576.0,
                           double(free) / 1048576.0);
@@ -1865,6 +1882,7 @@ private:
             const bool on = rd<uint8_t>(renderer + kRendAltOn) == 1;
             if (on != highActive_) {
                 highActive_ = on;
+                if (on) readHighCell(renderer);
                 info(fmt("keep: renderer +80 is now %d: font high %s; rebuilding at %d px cells", on ? 1 : 0, on ? "active" : "no longer active", effectiveCell()));
                 // Its copy waits for a buffer made off the render thread (highCopyTick); the rebuild after it.
                 if (on && !raw_) highCopyPending_ = true;
@@ -2069,6 +2087,7 @@ private:
     Phase phase_ = Phase::Off;
     bool enabled_ = false;         // turnOn once the character's settings say on
     bool highActive_ = false;
+    int highCell_ = 32;            // font high's own cell (readHighCell)
     int builtCell_ = 0;
     uint64_t rebuildAt_ = 0;       // a debounced rebuild is due at this time (0 = none)
     unsigned swaps_ = 0;

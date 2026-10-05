@@ -65,7 +65,7 @@ struct PanelView {
     int reapplies = 0;
     std::string client = "-";       // the game's language; "-" (dimmed) until read
     bool clientRead = false;
-    bool highActive = false;        // the game's high-resolution font is on (Chat's Sharpness Auto is 32 px cells)
+    int highCell = 0;               // high font cell (0: off)
     static constexpr int kSharps[4] = {0, 2, 3, 4};   // the Sharpness radios' values: Auto, 2x, 3x, 4x
     std::string chatSharpDenied[4]; // by radio (swap.h chatSharpDenied): why Chat cannot build it now; "" = it can
     std::string chatSharpNote;      // the note when the saved Sharpness cannot be built now (the size used); "" = none
@@ -818,9 +818,9 @@ private:
                 tooltip(denied.c_str());
                 g_->EndDisabled();
             }
-            if (grp == Group::Chat && v.highActive) {
+            if (grp == Group::Chat && v.highCell > 16) {
                 row("", nullptr);
-                disabledText("The game's high-resolution font is on, so Auto draws 32 px cells.");
+                disabledText(("The game's high-resolution font is on, so Auto draws " + std::to_string(v.highCell) + " px cells.").c_str());
             }
             if (grp == Group::Chat && !v.chatSharpNote.empty()) {
                 row("", nullptr);

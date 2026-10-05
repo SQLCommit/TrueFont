@@ -37,7 +37,7 @@
 
 namespace {
 
-constexpr double kVersion = 1.1;
+constexpr double kVersion = 1.2;
 constexpr const char* kName = "truefont";
 
 IAshitaCore* core = nullptr;
@@ -1517,7 +1517,7 @@ tf::PanelView panelView() {
         v.installed = installer->installed();
         v.showOriginal = installer->showingOriginal();
         v.reapplies = installer->reapplies();
-        v.highActive = installer->highActive();
+        v.highCell = installer->highActive() ? installer->highMin() : 0;
         if (installer->textureBytes()) { v.textures += 1; v.textureBytes += installer->textureBytes(); }
         v.keptBytes = installer->keptBytes() + installer->shapesBytes();
         v.originalBytes = installer->originalBytes();
