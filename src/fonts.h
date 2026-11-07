@@ -4,6 +4,8 @@
 #pragma once
 #include <windows.h>
 #include <algorithm>
+#include <cstdint>
+#include <utility>
 #include <memory>
 #include <string>
 #include <vector>
@@ -96,12 +98,29 @@ inline std::string fromChatText(const std::string& sjis) {
     return toUtf8(w);
 }
 
+// The family names (name ID 1, Windows platform, every language) in one 'name' table. Bounds-checked.
+inline void nameTableFamilies(const uint8_t* tb, size_t len, std::vector<std::wstring>& out) {
+    const auto be16 = [](const uint8_t* p) { return uint32_t(p[0]) << 8 | p[1]; };
+    if (!tb || len < 6) return;
+    const uint32_t count = be16(tb + 2), strings = be16(tb + 4);
+    for (uint32_t i = 0; i < count && 6 + size_t(i) * 12 + 12 <= len; i++) {
+        const uint8_t* nr = tb + 6 + size_t(i) * 12;
+        const uint32_t platform = be16(nr), id = be16(nr + 6), bytes = be16(nr + 8), so = be16(nr + 10);
+        if (platform != 3 || id != 1 || !bytes || (bytes & 1) || size_t(strings) + so + bytes > len) continue;
+        std::wstring name;
+        for (uint32_t b = 0; b < bytes; b += 2) name += wchar_t(be16(tb + size_t(strings) + so + b));
+        const bool dup = std::any_of(out.begin(), out.end(), [&](const std::wstring& x) { return _wcsicmp(x.c_str(), name.c_str()) == 0; });
+        if (!dup) out.push_back(std::move(name));
+    }
+}
+
 class FontList {
 public:
     std::vector<std::wstring> families;   // sorted, case-insensitive
     std::vector<std::wstring> japanese;   // the families GDI also reports with SHIFTJIS_CHARSET, sorted the same way
     std::vector<std::wstring> folder;     // the families only the fonts folder has (fontsdir.h), sorted the same way
     std::vector<std::wstring> symbol;     // the families GDI reports with SYMBOL_CHARSET, sorted the same way
+    std::vector<std::pair<std::wstring, std::wstring>> aliases;   // another language's family name -> the listed one
     std::wstring firstText;               // the first family that draws basic Latin ("" when none was found: first() is the list's first)
     bool failed = false;                  // the enumeration ran out of memory (enumerate() then returns null)
     size_t duplicates = 0;                // families of folder files that Windows already has (never used)
@@ -116,6 +135,7 @@ public:
         lf.lfCharSet = DEFAULT_CHARSET;
         EnumFontFamiliesExW(dc, &lf, &FontList::callback, reinterpret_cast<LPARAM>(list.get()), 0);
         list->finish();
+        if (!list->failed) list->addAliases(dc);
         if (!list->failed) list->firstText = list->pickFirstText([dc](const std::wstring& f) { return drawsBasicLatin(dc, f); });
         DeleteDC(dc);
         return list->failed || list->families.empty() ? nullptr : list;
@@ -128,10 +148,51 @@ public:
             f->erase(std::unique(f->begin(), f->end(), same), f->end());
         }
     }
+    // The listed family for `name`, also by its other-language name (GDI lists the system locale's).
     std::wstring find(const std::wstring& name) const {
         for (const auto& f : families)
             if (_wcsicmp(f.c_str(), name.c_str()) == 0) return f;
+        for (const auto& a : aliases)
+            if (_wcsicmp(a.first.c_str(), name.c_str()) == 0) return a.second;
         return std::wstring();
+    }
+    // Families with names in several languages: CJK fonts (SHIFTJIS listed) and non-ASCII names.
+    void addAliases(HDC dc) {
+        if (!dc) return;
+        try {
+            for (const auto& f : families) {
+                const bool ascii = std::all_of(f.begin(), f.end(), [](wchar_t c) { return c < 0x80; });
+                if ((ascii && !isJapanese(f)) || f.size() >= LF_FACESIZE) continue;
+                std::vector<std::wstring> names;
+                tableNames(dc, f, names);
+                for (auto& n : names)
+                    if (_wcsicmp(n.c_str(), f.c_str()) != 0) aliases.emplace_back(std::move(n), f);
+            }
+        } catch (const std::exception&) {
+            failed = true;
+        }
+    }
+    // The family names in `family`'s own 'name' table, when GDI selects that family.
+    static void tableNames(HDC dc, const std::wstring& family, std::vector<std::wstring>& out) {
+        LOGFONTW lf{};
+        lf.lfHeight = -16;
+        lf.lfCharSet = DEFAULT_CHARSET;
+        lf.lfOutPrecision = OUT_TT_ONLY_PRECIS;
+        wcsncpy_s(lf.lfFaceName, family.c_str(), _TRUNCATE);
+        HFONT font = CreateFontIndirectW(&lf);
+        if (!font) return;
+        HGDIOBJ was = SelectObject(dc, font);
+        wchar_t face[LF_FACESIZE] = {};
+        if (was && GetTextFaceW(dc, LF_FACESIZE, face) > 0 && _wcsicmp(face, family.c_str()) == 0) {
+            constexpr DWORD kName = 0x656D616E;   // 'name'
+            const DWORD n = GetFontData(dc, kName, 0, nullptr, 0);
+            if (n != GDI_ERROR && n >= 6 && n <= (1u << 20)) {
+                std::vector<uint8_t> tb(n);
+                if (GetFontData(dc, kName, 0, tb.data(), n) == n) nameTableFamilies(tb.data(), n, out);
+            }
+        }
+        if (was) SelectObject(dc, was);
+        DeleteObject(font);
     }
     bool empty() const { return families.empty(); }
     // The new-player default font (a non-empty list): the first family that draws basic Latin, else the list's first.

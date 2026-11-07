@@ -30,12 +30,12 @@ inline std::string fontsText(int on, int groups) { return on <= 0 ? std::string(
 
 // "uses" after one group whose name is singular (Chat and menus, HUD text, Compass), else "use".
 inline const char* useVerb(const std::string& groups) { return groups == "Chat/Items" || groups == "HUD text" || groups == "Compass" ? "uses" : "use"; }
-// The chat line for fonts that are not installed: each name, the groups that had it, and what they draw with instead.
+// The chat line for fonts that were not found: each name, the groups that had it, and what they draw with instead.
 struct MissingFont { std::string name, groups, used; };
 inline std::string missingFontsText(const std::vector<MissingFont>& m) {
     if (m.empty()) return std::string();
-    if (m.size() == 1) return "the font '" + m[0].name + "' is not installed; " + m[0].groups + " " + useVerb(m[0].groups) + " " + m[0].used + ".";
-    std::string t = "these fonts are not installed: ";
+    if (m.size() == 1) return "the font '" + m[0].name + "' was not found; " + m[0].groups + " " + useVerb(m[0].groups) + " " + m[0].used + ".";
+    std::string t = "these fonts were not found: ";
     for (size_t i = 0; i < m.size(); i++) t += std::string(i ? "; '" : "'") + m[i].name + "' (" + m[i].groups + " " + useVerb(m[i].groups) + " " + m[i].used + ")";
     return t + ".";
 }
@@ -62,7 +62,7 @@ inline std::string iniUnescape(const std::string& s) {
     return o;
 }
 
-inline constexpr const char* kDefaultFont = "Segoe UI";   // the fallback for a font that is not installed
+inline constexpr const char* kDefaultFont = "Segoe UI";   // the fallback for a font that was not found
 inline constexpr const char* kSameChat = "same";           // an older file's "Same as chat" (migration only)
 inline constexpr const char* kSameHeadings = "same_headings";   // an older file's "Same as menu headings" (jobs; migration only)
 inline constexpr const char* kJpOff = "off";               // chat_jp: kana and kanji stay the game's own (Latin only; Off)
@@ -652,22 +652,29 @@ inline DetailState detailState(Group grp, bool off, bool available, bool groupOn
 // The line under a not-available group's note on the Nameplates and Damage numbers tabs, while Aspect and Size can work.
 inline constexpr const char* kShapeStillNote = "Aspect and Size still work.";
 inline const char* unavailableShapeNote(Group grp, int shape) { return hasShape(grp) && shape == 0 ? kShapeStillNote : ""; }
-// A not-available group's note (the language's is the panel's own): its letters changed this session, a font mod's letter
+// The DAT the menu and HUD letters load from.
+inline constexpr const char* kFontDat = "ROM/119/51.DAT";
+// A DAT mod's note: the XIPivot overlay serving 51.DAT, else the game folder's own file.
+inline std::string modLayoutNote(const std::string& overlay) {
+    return overlay.empty()
+        ? std::string("A DAT mod changed the game's letter sheet (") + kFontDat + "), so this tab keeps the mod's look. To use TrueFont here, put back the game's own file and restart the game."
+        : std::string("A DAT mod changed the game's letter sheet (") + kFontDat + ", from the XIPivot overlay '" + overlay +
+              "'), so this tab keeps the mod's look. To use TrueFont here, remove that overlay and restart the game.";
+}
+// A not-available group's note (the language's is the panel's own): its letters changed this session, a DAT mod's letter
 // layout TrueFont does not recognise (on a game version it knows), or the game version.
-inline constexpr const char* kModLayoutNote = "TrueFont doesn't recognise this font mod's letter layout, so this group keeps the mod's look. See the log.";
-inline const char* unavailableNote(bool replaced, bool modLayout, int unknownClient) {
+inline std::string unavailableNote(bool replaced, bool modLayout, int unknownClient, const std::string& overlay = std::string()) {
     return replaced ? "Its letters changed during this session, so it keeps the game's own look; /tfont on takes them as they are now."
          : unknownClient == 1 ? "This game version is newer than TrueFont knows: this group keeps the game's own look. See the log."
          : unknownClient == 2 ? "This game version is not one TrueFont knows: this group keeps the game's own look. See the log."
-         : modLayout          ? kModLayoutNote
+         : modLayout          ? modLayoutNote(overlay)
                               : "Not available on this game version: this group keeps the game's own look. See the log.";
 }
-// A menu or HUD font group's client-version value for its note (0 known, 1 newer, 2 other): the version's when the menu and
-// HUD fonts did not resolve, or when the group's record keeps its look for its letter layout. On a game version TrueFont
-// does not know, a changed layout is as likely the game's update as a font mod's, so the version note says it.
-inline int spriteGroupUnknownClient(bool spritesResolved, bool modLayout, int unknownClient) { return !spritesResolved || modLayout ? unknownClient : 0; }
+// A menu or HUD font group's client-version value for its note (0 known, 1 newer, 2 other): the version's only when the
+// menu and HUD fonts did not resolve. Resolved fonts mean the version matches; a layout refusal then says the mod's note.
+inline int spriteGroupUnknownClient(bool spritesResolved, bool, int unknownClient) { return !spritesResolved ? unknownClient : 0; }
 // /tfont on retries failed sprite records; rebuild does not revalidate them.
-inline constexpr const char* kGroupFailedNote = "Could not be built; /tfont on tries again. See the log.";
+inline constexpr const char* kGroupFailedNote = "Could not be built; pick another font, or /tfont on, to try again. See the log.";
 // /tfont reset's reply. The defaults switch every font group off (defaultGroup), so the game's own fonts come back.
 inline std::string resetReplyText(bool enabled) {
     return std::string("reset: every setting is back to its default; every font group is switched off") +

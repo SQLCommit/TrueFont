@@ -72,7 +72,7 @@ Each group's **TrueFont** checkbox works independently. The sidebar's master swi
 
 For fonts you do not want to install in Windows, put `.ttf`, `.otf`, `.ttc` or `.otc` files directly in `/ashita/config/truefont/fonts/`, then press **Rescan Fonts** or run `/tfont fonts rescan`. They are loaded only for the game. Subfolders are not scanned; unreadable files and files over 64 MB are skipped. An installed family takes priority over a folder copy.
 
-Missing font families fall back to Segoe UI with a warning; the saved choice is kept. A missing Japanese font falls back to the Chat/Items font instead.
+A font that isn't found falls back to Segoe UI with a warning; the saved choice is kept. A missing Japanese font falls back to the Chat/Items font instead. Fonts are found by any of their names, so a font with a Japanese name is still found on Windows set to Japanese.
 
 </dd>
 </dl>
@@ -203,7 +203,7 @@ In **Settings > Presets**, use **Save As** to save a look (names up to 40 charac
 
 The sidebar shows the client language, active font groups, build progress and memory use. **From Font** counts replaced characters; **Native** counts those keeping the original art. **Re-Applied** counts textures restored after something else replaced them.
 
-**Show Original** temporarily restores the original fonts, Aspect and Size for comparison without rebuilding. With a compatible font mod installed, this shows the mod's art.
+**Show Original** temporarily restores the original fonts, Aspect and Size for comparison without rebuilding. With a compatible DAT mod installed, this shows the mod's art.
 
 </dd>
 </dl>
@@ -213,12 +213,12 @@ The sidebar shows the client language, active font groups, build progress and me
 ---
 
 <details>
-<summary><strong>Compatibility</strong> — Font mods and supported game languages.</summary>
+<summary><strong>Compatibility</strong> — DAT mods and supported game languages.</summary>
 
 <dl>
 <dd>
 
-**XiView** and **Pivot** font overlays work when they preserve the game's layout. XiView's high-resolution letter sheets (the game's layout at 2x or 4x) are recognised; its 512 sheet is confirmed in play. Icons, logos and disabled groups keep the mod's art; unrecognized layouts are left unchanged. After changing a mod during play, run `/tfont on` to check its textures again. HorizonXI's font layout is recognized, but compatibility has not yet been confirmed in play.
+**XiView** and other DAT mods, including **XIPivot** overlays, work when they keep the game's letter layout. XiView's high-resolution letter sheets (the game's layout at 2x or 4x) are recognised; its 512 sheet is confirmed in play. Icons, logos and disabled groups keep the mod's art. A tab whose letter layout TrueFont doesn't recognise is locked and keeps the mod's look; its note names `ROM/119/51.DAT` and the XIPivot overlay it comes from, so you know what to remove. After changing a mod, restart the game. HorizonXI's font layout is recognized, but compatibility has not yet been confirmed in play.
 
 | Client language | Support |
 | :--- | :--- |

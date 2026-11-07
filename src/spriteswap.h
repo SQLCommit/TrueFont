@@ -2082,6 +2082,7 @@ private:
             const double t1 = qpcMs();
             RegistryScan rs;
             const auto keepLeaf = [&](const LiveLeaf& l) {
+                if (offPlaySet(l)) return false;
                 for (const Rec* s : found)
                     if (samples(l, s->rec, kSpriteRecs[int(s->id)].name, aliasOf(*s))) return true;
                 return false;
@@ -2811,6 +2812,7 @@ private:
                 live.push_back(&s);
         RegistryScan rs;
         const auto keepLeaf = [&](const LiveLeaf& l) {
+            if (offPlaySet(l)) return false;
             for (const Rec* s : live)
                 if (samples(l, s->rec, kSpriteRecs[int(s->id)].name, aliasOf(*s))) return true;
             return false;

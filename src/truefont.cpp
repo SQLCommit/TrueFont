@@ -19,6 +19,7 @@
 #include "presets.h"
 #include "fonts.h"
 #include "fontsdir.h"
+#include "pivot.h"
 #include "panel.h"
 #include "commands.h"
 #ifdef TF_DEV
@@ -37,13 +38,15 @@
 
 namespace {
 
-constexpr double kVersion = 1.2;
+constexpr double kVersion = 1.3;
 constexpr const char* kName = "truefont";
 
 IAshitaCore* core = nullptr;
 plog::FileLog fileLog;
 plog::Run run;
 std::string root;              // the Ashita folder (above plugins\)
+std::string modOverlayName;    // 51.DAT's XIPivot overlay
+bool modOverlayRead = false;
 std::string charName;          // "" before login
 bool langLogPending = false;   // Log the language once per character load.
 uint32_t charServer = 0;
@@ -521,7 +524,7 @@ void sayMissingFonts() {
         const std::string& name = settings.g[g].font;
         if (!tf::sayMissingFont(settings, tf::Group(g), gm, missingSaid.count(name) != 0)) continue;
         const std::string groups = settings.drawnWithText(tf::Group(g));
-        warn("font: \"" + name + "\" (the own font of " + tf::groupName(tf::Group(g)) + ") is not installed; " + groups + " " + tf::useVerb(groups) + " " + tf::toUtf8(used));
+        warn("font: \"" + name + "\" (the own font of " + tf::groupName(tf::Group(g)) + ") was not found; " + groups + " " + tf::useVerb(groups) + " " + tf::toUtf8(used));
         const std::string usedText = familyText(used);
         auto it = std::find_if(news.begin(), news.end(), [&](const tf::MissingFont& m) { return m.name == name && m.used == usedText; });
         if (it == news.end()) news.push_back(tf::MissingFont{name, groups, usedText});
@@ -530,7 +533,7 @@ void sayMissingFonts() {
     bool jpMissing = false;
     jpFamily(jpMissing);
     if (tf::sayMissingJp(settings, jpMissing, missingSaid.count(settings.chatJp) != 0)) {
-        warn("font: \"" + settings.chatJp + "\" (the Japanese font of Chat/Items) is not installed; its kana and kanji use " + tf::toUtf8(family));
+        warn("font: \"" + settings.chatJp + "\" (the Japanese font of Chat/Items) was not found; its kana and kanji use " + tf::toUtf8(family));
         const std::string usedText = familyText(family);
         auto it = std::find_if(news.begin(), news.end(), [&](const tf::MissingFont& m) { return m.name == settings.chatJp && m.used == usedText; });
         if (it == news.end()) news.push_back(tf::MissingFont{settings.chatJp, kJpGroups, usedText});
@@ -684,6 +687,7 @@ void chatTurnOn(bool announce = false) {
     }
 }
 void spritesTurnOn(bool announce = false) {
+    modOverlayRead = false;   // Looks again.
     sprites->turnOn(announce);
     if (installer && installer->showingOriginal()) {
         std::string why;
@@ -995,6 +999,15 @@ void takePresetOutcomes() {
 }
 
 std::string fontsDir() { return root + "config\\" + kName + "\\fonts\\"; }
+// 51.DAT's XIPivot overlay, read once.
+std::string modOverlay() {
+    if (!modOverlayRead) {
+        modOverlayRead = true;
+        modOverlayName = tf::pivotOverlayLive(root, "ROM\\119\\51.DAT");
+        info("sprites: a DAT mod's letter layout; " + std::string(tf::kFontDat) + (modOverlayName.empty() ? " is in no XIPivot overlay: the game folder's own file" : " is from the XIPivot overlay '" + modOverlayName + "'"));
+    }
+    return modOverlayName;
+}
 std::wstring widen(const std::string& ansi) {   // the Ashita folder's path (GetModuleFileNameA)
     if (ansi.empty()) return std::wstring();
     const int n = MultiByteToWideChar(CP_ACP, 0, ansi.c_str(), int(ansi.size()), nullptr, 0);
@@ -1215,7 +1228,7 @@ void runDiag() {
         bool jm = false;
         const std::wstring jf = jpFamily(jm);
         info("japanese font: " + (settings.jpOff() ? std::string("off (kana and kanji stay the game's own)")
-                                                    : (settings.jpSame() ? std::string("same as Font") : settings.chatJp) + ", drawn with " + tf::toUtf8(jf) + (jm ? " (not installed)" : "")));
+                                                    : (settings.jpSame() ? std::string("same as Font") : settings.chatJp) + ", drawn with " + tf::toUtf8(jf) + (jm ? " (not found)" : "")));
     }
     std::string fam;   // what each group draws with, and the Same font as chain it came through (tab order)
     for (const tf::Group grp : tf::kGroupOrder) {
@@ -1340,10 +1353,10 @@ void runCommand(const std::vector<std::string>& a) {
         const std::wstring found = list ? list->find(tf::fromUtf8(want)) : std::wstring();
         const tf::Group chatFollows = settings.follows(tf::Group::Chat);
         const std::string followText = chatFollows != tf::Group::None ? std::string(" (Same Font As ") + tf::groupTitle(chatFollows) + ")" : std::string();
-        if (want.empty()) {   // the font in use, and the saved one when it is not installed
+        if (want.empty()) {   // the font in use, and the saved one when it was not found
             bool missing = false;
             const std::string used = familyText(effectiveFamily(missing));
-            chat("/tfont font \"<family>\": Chat/Items uses " + used + followText + (missing ? " (the saved " + settings.chat().font + " is not installed)" : std::string()) +
+            chat("/tfont font \"<family>\": Chat/Items uses " + used + followText + (missing ? " (the saved " + settings.chat().font + " was not found)" : std::string()) +
                  ". The panel lists every installed font: /truefont.");
             return;
         }
@@ -1496,7 +1509,8 @@ tf::PanelView panelView() {
             const auto st = sprites ? sprites->groupState(tf::Group(g)) : tf::SpriteInstaller::GroupState::Unavailable;
             v.groups[g].available = st != tf::SpriteInstaller::GroupState::Unavailable;
             v.groups[g].replaced = sprites && sprites->groupArtReplaced(tf::Group(g));   // a record re-created since load holds other art
-            v.groups[g].modLayout = sprites && sprites->groupLayoutUnknown(tf::Group(g));   // a font mod's letter layout it does not recognise
+            v.groups[g].modLayout = sprites && sprites->groupLayoutUnknown(tf::Group(g));   // a DAT mod's letter layout it does not recognise
+            if (v.groups[g].modLayout) v.groups[g].modOverlay = modOverlay();
             v.groups[g].failed = st == tf::SpriteInstaller::GroupState::Failed;   // could not be built or put in place
             v.groups[g].restart = sprites && sprites->groupNeedsRestart(tf::Group(g));
             v.groups[g].unknownClient = tf::spriteGroupUnknownClient(sprites != nullptr, v.groups[g].modLayout, unknown);
@@ -1565,17 +1579,17 @@ tf::PanelView panelView() {
         w = v.sideOff ? std::string("TrueFont turned itself off: something else kept replacing the font textures") + retry
                       : std::string("Chat/Items turned itself off: something else kept replacing its texture") + retry;
     else if (sprites && spriteOn && sprites->languageRefused()) w = sprites->languageRefusal() + (installer ? "; Chat/Items works." : ".");   // no retry can change it
-    else if (sprites && spriteOn && !sprites->failure().empty()) w = "The menu and HUD fonts could not turn on: " + sprites->failure() + retry;
+    else if (sprites && spriteOn && !sprites->failure().empty()) w = "The menu and HUD fonts could not turn on: " + sprites->failure() + tf::kChangeRetryText;
     else if (sprites && spriteOn && sprites->autoOff()) w = "The menu and HUD fonts turned themselves off: something else kept replacing their textures" + retry;
     else {
         for (const tf::Group grp : tf::kGroupOrder) {
             const int g = int(grp);
             if (w.empty() && v.groups[g].missing) {
                 const std::string groups = settings.drawnWithText(grp);
-                w = "The font '" + settings.g[g].font + "' is not installed; " + groups + " " + tf::useVerb(groups) + " " + v.groups[g].family + ".";
+                w = "The font '" + settings.g[g].font + "' was not found; " + groups + " " + tf::useVerb(groups) + " " + v.groups[g].family + ".";
             }
         }
-        if (w.empty() && v.jpMissing) w = "The font '" + settings.chatJp + "' is not installed; " + kJpGroups + " use " + v.groups[int(tf::Group::Chat)].family + ".";
+        if (w.empty() && v.jpMissing) w = "The font '" + settings.chatJp + "' was not found; " + kJpGroups + " use " + v.groups[int(tf::Group::Chat)].family + ".";
         if (w.empty() && v.reapplies) w = "Something else replaced a font texture " + std::to_string(v.reapplies) + " times; TrueFont put it back. See the log.";
     }
     return v;

@@ -298,6 +298,12 @@ inline RegistrySig registrySignature(const MemReader& m, uintptr_t registry, con
 // Does a leaf sample this record? By its bound record (+4C), else by its (lower-cased) texture name. `alias`: a
 // plugin-owned copy of the record (spriteswap.h's nameplate copy), which counts as the record itself: a leaf bound to it
 // samples the record's rects (0 = none).
+// Lobby and credits sets.
+inline bool offPlaySet(const LiveLeaf& l) {
+    for (const char* n : {"menu    lobbywin", "menu    lobbyps2", "menu    installp"})
+        if (std::memcmp(l.res, n, 16) == 0) return true;
+    return false;
+}
 inline bool samples(const LiveLeaf& l, uintptr_t rec, const char* name16, uintptr_t alias = 0) {
     if (l.record) return l.record == rec || (alias && l.record == alias);
     for (int i = 0; i < 16; i++) {

@@ -18,7 +18,8 @@ namespace tf {
 
 // Panel palette.
 inline const ImVec4 kColText(0.93f, 0.91f, 0.86f, 1.0f), kColDim(0.72f, 0.74f, 0.80f, 1.0f), kColLume(0.58f, 0.90f, 0.80f, 1.0f),
-    kColSteel(0.44f, 0.62f, 1.0f, 1.0f), kColWarn(0.91f, 0.70f, 0.31f, 1.0f), kColHead(0.55f, 0.71f, 1.0f, 1.0f);
+    kColSteel(0.44f, 0.62f, 1.0f, 1.0f), kColWarn(0.91f, 0.70f, 0.31f, 1.0f), kColHead(0.55f, 0.71f, 1.0f, 1.0f),
+    kColBad(0.94f, 0.42f, 0.36f, 1.0f), kColInk(0.08f, 0.06f, 0.04f, 1.0f);
 
 inline constexpr int kCellsTotal = kGridCells;
 
@@ -28,6 +29,7 @@ struct GroupView {
     bool available = true;          // false: its textures do not match this game version
     bool replaced = false;   // Recreated record with different art; /tfont on revalidates.
     bool modLayout = false;   // Its record's letter layout (a DAT mod's) is not one TrueFont recognises.
+    std::string modOverlay;   // XIPivot overlay with 51.DAT
     bool failed = false;   // Build or installation failed.
     bool restart = false;   // Earlier TrueFont texture still referenced.
     int unknownClient = 0;   // Unrecognized client: 1=newer, 2=other.
@@ -77,6 +79,7 @@ struct PanelView {
     bool fontsScanning = false;     // a Rescan Fonts is queued or running (its button greys)
     // Off, unsupported, refused or turned itself off: the tabs, Compare and the numbers grey out.
     bool running() const { return s.enabled && supported && !sideOff; }
+    bool editable() const { return s.enabled && supported; }   // Down still edits.
     bool anyMissing() const { for (const auto& g : groups) if (g.missing) return true; return false; }   // Missing flags include only used families.
 };
 enum class PresetOp : uint8_t { None, List, Load, Save, Delete };
@@ -340,6 +343,40 @@ private:
         if (wrap) g_->PushTextWrapPos(0.0f);
         g_->TextColored(c, "%s", s);
         if (wrap) g_->PopTextWrapPos();
+    }
+    // Problem note: tint, bar, "!" badge.
+    void alertText(const char* s, bool bad = false) {
+        const ImVec4 c = bad ? kColBad : kColWarn;
+        const float h = g_->GetTextLineHeight();
+        g_->PushID(s);
+        g_->PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(0.0f, 4.0f));
+        if (g_->BeginTable("##tf_alert", 3, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoPadOuterX | ImGuiTableFlags_NoPadInnerX)) {
+            g_->TableSetupColumn("bar", ImGuiTableColumnFlags_WidthFixed, 3.0f);
+            g_->TableSetupColumn("icon", ImGuiTableColumnFlags_WidthFixed, h + 12.0f);
+            g_->TableSetupColumn("text", ImGuiTableColumnFlags_WidthStretch);
+            g_->TableNextRow();
+            g_->TableSetBgColor(ImGuiTableBgTarget_RowBg0, g_->GetColorU32(ImVec4(c.x, c.y, c.z, bad ? 0.15f : 0.13f)));
+            g_->TableSetBgColor(ImGuiTableBgTarget_CellBg, g_->GetColorU32(c), 0);
+            g_->TableNextColumn();
+            g_->TableNextColumn();
+            g_->SetCursorPosX(g_->GetCursorPosX() + 6.0f);
+            g_->PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
+            g_->PushStyleVar(ImGuiStyleVar_FrameRounding, h * 0.5f);
+            g_->PushStyleColor(ImGuiCol_Button, c);
+            g_->PushStyleColor(ImGuiCol_ButtonHovered, c);
+            g_->PushStyleColor(ImGuiCol_ButtonActive, c);
+            g_->PushStyleColor(ImGuiCol_Text, kColInk);
+            g_->Button("!", ImVec2(h, h));
+            g_->PopStyleColor(4);
+            g_->PopStyleVar(2);
+            g_->TableNextColumn();
+            g_->PushTextWrapPos(g_->GetCursorPosX() + (std::max)(1.0f, g_->GetContentRegionAvail().x - 8.0f));
+            g_->TextColored(c, "%s", s);
+            g_->PopTextWrapPos();
+            g_->EndTable();
+        }
+        g_->PopStyleVar();
+        g_->PopID();
     }
     void disabledText(const char* s, bool wrap = true) {
         if (wrap) g_->PushTextWrapPos(0.0f);
@@ -616,7 +653,7 @@ private:
     }
     // Group-specific section IDs prevent state and cached heights leaking between tabs.
     void groupTab(const PanelView& v, PanelResult& out, int gi) {
-        const bool off = !v.running() || !v.ready;
+        const bool off = !v.editable() || !v.ready;
         const Group grp = Group(gi);
         const GroupView& gv = v.groups[gi];
         const GroupSettings& gs = v.s.g[gi];
@@ -631,19 +668,19 @@ private:
         }
         disabledText(groupCopy(grp).tip);
         if (!gv.available) {
-            disabledText(!gv.language.empty() ? (gv.language + " menus aren't supported yet: this group keeps the game's own look.").c_str()
-                                              : unavailableNote(gv.replaced, gv.modLayout, gv.unknownClient));
+            alertText(!gv.language.empty() ? (gv.language + " menus aren't supported yet: this group keeps the game's own look.").c_str()
+                                           : unavailableNote(gv.replaced, gv.modLayout, gv.unknownClient, gv.modOverlay).c_str());
             if (const char* still = unavailableShapeNote(grp, gv.shape); *still) disabledText(still);   // Aspect and Size do not need the font
         } else {
             // A group that is off has no note of its own (the box says it); one that is on says when it is down.
-            if (gs.on && gv.down) disabledText("Off: see the warning in Status.");
-            else if (gs.on && gv.restart) text(kColWarn, "Holds an earlier texture of TrueFont's; restart the game.");
-            else if (gs.on && gv.failed) text(kColWarn, kGroupFailedNote);
+            if (gs.on && gv.down) alertText("Off: see the warning in Status.", true);
+            else if (gs.on && gv.restart) alertText("Holds an earlier texture of TrueFont's; restart the game.");
+            else if (gs.on && gv.failed) alertText(kGroupFailedNote, true);
             if (const char* note = groupCopy(grp).note) disabledText(note);
         }
         endSection();
         // The sections below the header grey while the group is off (kept for when it is back on).
-        const bool dim = off || !gv.available || !gs.on;
+        const bool dim = off || !gv.available || !gs.on;   // Unavailable locks.
 
         beginSection("Font", dim, ("Font" + key).c_str());
         if (rowsBegin("##tf_rows_font")) {
@@ -795,7 +832,7 @@ private:
                 g_->EndDisabled();
                 if (gv.shape == 1) {
                     row("", nullptr);
-                    text(kColWarn, takenNote);
+                    alertText(takenNote);
                 } else if (gv.shape == 2) {
                     row("", nullptr);
                     disabledText(kShapeUnavailableNote);
@@ -824,7 +861,7 @@ private:
             }
             if (grp == Group::Chat && !v.chatSharpNote.empty()) {
                 row("", nullptr);
-                text(kColWarn, v.chatSharpNote.c_str());
+                alertText(v.chatSharpNote.c_str());
             }
             if (grp == Group::Chat) {
                 const std::string saves = memoryText(v.originalBytes);
@@ -851,7 +888,7 @@ private:
             if (i != int(Group::Chat)) spritesDraw = spritesDraw || (v.groups[i].available && v.s.g[i].on);
         }
         const bool chatOff = !v.groups[int(Group::Chat)].available || !v.s.chat().on;
-        beginSection("Quality", !v.running() || !v.ready || !anyAvailable);
+        beginSection("Quality", !v.editable() || !v.ready || !anyAvailable);
         if (rowsBegin("##tf_quality")) {
             g_->BeginDisabled(chatOff && !spritesDraw);   // Engine, Hinting and Compress apply to every group
             row("Engine", "Who draws the letters from the font file. Windows: the sharpest letters with most fonts. FreeType: the font's true shapes, best for PostScript-style "
@@ -877,7 +914,7 @@ private:
         endSection();
     }
     void fontsSection(const PanelView& v, PanelResult& out) {
-        beginSection("Fonts", !v.running());
+        beginSection("Fonts", !v.editable());
         if (rowsBegin("##tf_fonts")) {
             row("Fonts Found", "Fonts in the Font lists: the ones installed in Windows, and the ones in TrueFont's fonts folder.");
             if (v.fonts) text(kColLume, fontsFoundText(*v.fonts).c_str(), false);
@@ -893,7 +930,7 @@ private:
         endSection();
     }
     void presetsSection(const PanelView& v, PanelResult& out) {
-        beginSection("Presets", !v.running() || !v.ready);
+        beginSection("Presets", !v.editable() || !v.ready);
         // Retain a newly saved preset selection until its refreshed list arrives; match names case-insensitively.
         if (savedGen_ && (v.presetsGen >= savedGen_ || std::find(v.presets.begin(), v.presets.end(), sel_) != v.presets.end())) savedGen_ = 0;
         if (v.presetsKnown && !savedGen_ && std::find(v.presets.begin(), v.presets.end(), sel_) == v.presets.end()) {

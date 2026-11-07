@@ -97,16 +97,7 @@ public:
                 seen.emplace_back(off, len);
                 std::vector<uint8_t> tb(len);
                 if (!read(off, len, tb.data())) break;
-                const uint32_t count = be16(&tb[2]), strings = be16(&tb[4]);
-                for (uint32_t i = 0; i < count && 6 + size_t(i) * 12 + 12 <= len; i++) {
-                    const uint8_t* nr = &tb[6 + size_t(i) * 12];
-                    const uint32_t platform = be16(nr), id = be16(nr + 6), bytes = be16(nr + 8), so = be16(nr + 10);
-                    if (platform != 3 || id != 1 || !bytes || (bytes & 1) || size_t(strings) + so + bytes > len) continue;
-                    std::wstring name;
-                    for (uint32_t b = 0; b < bytes; b += 2) name += wchar_t(be16(&tb[size_t(strings) + so + b]));
-                    const bool dup = std::any_of(out.begin(), out.end(), [&](const std::wstring& x) { return _wcsicmp(x.c_str(), name.c_str()) == 0; });
-                    if (!dup) out.push_back(std::move(name));
-                }
+                nameTableFamilies(tb.data(), len, out);
                 break;
             }
         }

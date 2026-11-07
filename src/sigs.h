@@ -116,6 +116,7 @@ inline bool sigSupporting(int s) { return s == SigAltFont; }
 // Known signature matches by PE timestamp, newest first. Only entries marked live were tested in-game.
 struct KnownBuild { uint32_t stamp; const char* name; bool live; };
 inline constexpr KnownBuild kKnownBuilds[] = {
+    {0x6AC37846, "the 2026-10-13 retail client", true},
     {0x6A995428, "the 2026-09-10 retail client", true},
     {0x6A7297F5, "the 2026-08-18 retail client", false},
     {0x6A4CC4C5, "the 2026-08-03 retail client", false},

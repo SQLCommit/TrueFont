@@ -481,9 +481,10 @@ inline bool decodeRaw(const RawTexture& raw, Readback& rb, std::string& why) {
 
 // The retry the panel's warnings offer.
 inline constexpr const char* kRetryText = ". Untick and tick TrueFont, or type /tfont on, to try again.";
+inline constexpr const char* kChangeRetryText = ". Pick another font, or untick and tick TrueFont, to try again.";   // Changes retry.
 // The panel's warning for a Chat and menus refusal. `restart`: only a game restart clears it.
 inline std::string chatDownWarning(bool sideOff, const std::string& failure, bool restart) {
-    return std::string(sideOff ? "TrueFont" : "Chat/Items") + " could not turn on: " + failure + (restart ? "." : kRetryText);
+    return std::string(sideOff ? "TrueFont" : "Chat/Items") + " could not turn on: " + failure + (restart ? "." : kChangeRetryText);
 }
 
 class Installer {
