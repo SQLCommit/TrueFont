@@ -278,6 +278,11 @@ inline int coreBelow(const Run& r) {
             if (r.cov[size_t(y) * size_t(r.w) + size_t(x)] >= kCoreCov) return y + 1 - r.asc;
     return 0;
 }
+inline bool hasCore(const Run& r) {   // any letter texel
+    for (const uint8_t v : r.cov)
+        if (v >= kCoreCov) return true;
+    return false;
+}
 // How far a run's letter texels reach over the baseline (rows; 0: none over it).
 inline int coreAbove(const Run& r) {
     for (int y = 0; y < r.h; y++)
@@ -666,7 +671,9 @@ inline bool buildSpriteAtlas(SpriteRec rec, const std::vector<GlyphSlot>& slots,
         Run run = raster(face, text, condense, squeeze);
         if (!flat || run.error || run.missing || run.w <= 0 || (squeeze == base && condense == classC)) return run;
         const Run& ref = raster(face, text, classC, base);
-        if (!ref.error && !ref.missing && ref.w > 0) run.asc += coreBelow(run) - coreBelow(ref);
+        if (ref.error || ref.missing || ref.w <= 0 || !hasCore(run) || !hasCore(ref)) return run;
+        const int shift = coreBelow(run) - coreBelow(ref);
+        if (shift >= -k && shift <= k) run.asc += shift;   // hinting: 1 px at most
         return run;
     };
     const auto lineKey = [&](const GlyphSlot& s) { return (int(drawGroup(s, o)) * kGroupCount + int(s.group)) * 4 + s.cls; };

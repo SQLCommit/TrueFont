@@ -5,7 +5,7 @@
 // retail measurements (spriteswap.h). The code maps are the English set's (the Japanese sets' are the same).
 #pragma once
 namespace tf::tables_jp {
-// "font    font    ": 341 rects
+// "font    font    ": 342 rects
 inline constexpr FontEntry kFontFont[] = {
     {0, 0, 4, 8, Group::Labels, 0, L" "},
     {12, 0, 6, 11, Group::Labels, 0, L"!"},
@@ -186,6 +186,7 @@ inline constexpr FontEntry kFontFont[] = {
     {107, 67, 9, 11, Group::Labels, 0, L"g"},
     {107, 67, 9, 12, Group::Labels, 0, L"g"},
     {129, 75, 68, 31, Group::Damage, 1, L"Miss!"},
+    {0, 77, 9, 12, Group::Labels, 0, L"h"},
     {10, 77, 5, 12, Group::Labels, 0, L"i"},
     {0, 78, 8, 11, Group::Labels, 0, L"h"},
     {0, 78, 9, 11, Group::Labels, 0, L"h"},
@@ -349,8 +350,8 @@ inline constexpr FontEntry kFontFont[] = {
     {171, 231, 19, 19, Group::NamesHud, 0, L"w"},
     {192, 231, 19, 19, Group::NamesHud, 0, L"x"},
 };
-inline constexpr uint32_t kPinFontFont = 0x9CB56B05u;
-inline constexpr uint32_t kHashFontFont = 0x3C2B6206u;
+inline constexpr uint32_t kPinFontFont = 0xC2CBD1BBu;
+inline constexpr uint32_t kHashFontFont = 0xC906D01Bu;
 // font font: each slot's native ink on 51.DAT (the core, else the whole ink), 180 slots
 inline constexpr Rect kInkFontFont[] = {
     {0, 0, 0, 0},
@@ -437,8 +438,8 @@ inline constexpr Rect kInkFontFont[] = {
     {90, 68, 6, 7},
     {108, 68, 8, 9},
     {130, 76, 66, 29},
-    {11, 79, 3, 9},
     {1, 79, 7, 9},
+    {11, 79, 3, 9},
     {17, 79, 6, 11},
     {26, 79, 7, 9},
     {36, 79, 4, 9},
@@ -534,7 +535,7 @@ inline constexpr Rect kInkFontFont[] = {
     {173, 233, 15, 15},
     {194, 233, 14, 15},
 };
-// "menu    menu2fon": 179 rects
+// "menu    menu2fon": 191 rects
 inline constexpr FontEntry kMenu2fon[] = {
     {145, 92, 7, 8, Group::Headings, 2, L"J"},
     {154, 92, 7, 8, Group::Headings, 2, L"E"},
@@ -543,6 +544,16 @@ inline constexpr FontEntry kMenu2fon[] = {
     {189, 92, 7, 8, Group::Headings, 2, L"?"},
     {197, 92, 6, 7, Group::Headings, 3, L"J"},
     {204, 92, 6, 7, Group::Headings, 3, L"E"},
+    {147, 100, 8, 11, Group::Headings, 1, L"0"},
+    {155, 100, 9, 11, Group::Headings, 1, L"1"},
+    {164, 100, 8, 10, Group::Headings, 1, L"2"},
+    {173, 100, 8, 10, Group::Headings, 1, L"3"},
+    {181, 100, 8, 11, Group::Headings, 1, L"4"},
+    {190, 100, 8, 11, Group::Headings, 1, L"5"},
+    {199, 100, 8, 11, Group::Headings, 1, L"6"},
+    {208, 100, 8, 10, Group::Headings, 1, L"7"},
+    {216, 100, 8, 11, Group::Headings, 1, L"8"},
+    {225, 100, 8, 11, Group::Headings, 1, L"9"},
     {147, 101, 7, 9, Group::Headings, 1, L"0"},
     {156, 101, 7, 9, Group::Headings, 1, L"1"},
     {157, 101, 6, 9, Group::Headings, 1, L"1"},
@@ -558,6 +569,7 @@ inline constexpr FontEntry kMenu2fon[] = {
     {208, 101, 7, 9, Group::Headings, 1, L"7"},
     {216, 101, 7, 9, Group::Headings, 1, L"8"},
     {225, 101, 7, 9, Group::Headings, 1, L"9"},
+    {114, 160, 9, 11, Group::Headings, 0, L"L"},
     {2, 161, 9, 9, Group::Headings, 0, L"A"},
     {2, 161, 10, 9, Group::Headings, 0, L"A"},
     {3, 161, 8, 9, Group::Headings, 0, L"A"},
@@ -633,6 +645,7 @@ inline constexpr FontEntry kMenu2fon[] = {
     {190, 174, 6, 8, Group::Headings, 0, L"t"},
     {191, 174, 4, 8, Group::Headings, 0, L"t"},
     {191, 174, 5, 8, Group::Headings, 0, L"t"},
+    {206, 174, 10, 9, Group::Headings, 0, L"v"},
     {22, 175, 7, 7, Group::Headings, 0, L"a"},
     {23, 175, 6, 7, Group::Headings, 0, L"a"},
     {40, 175, 7, 7, Group::Headings, 0, L"c"},
@@ -716,8 +729,8 @@ inline constexpr FontEntry kMenu2fon[] = {
     {76, 214, 24, 10, Group::JobTags, 0, L"DNC"},
     {102, 214, 24, 10, Group::JobTags, 0, L"SCH"},
 };
-inline constexpr uint32_t kPinMenu2fon = 0x5DAB9F36u;
-inline constexpr uint32_t kHashMenu2fon = 0x2589FF45u;
+inline constexpr uint32_t kPinMenu2fon = 0x19074737u;
+inline constexpr uint32_t kHashMenu2fon = 0x50917E95u;
 // menu2fon: each slot's native ink on 51.DAT (the core, else the whole ink), 99 slots
 inline constexpr Rect kInkMenu2fon[] = {
     {146, 92, 5, 7},
@@ -737,6 +750,7 @@ inline constexpr Rect kInkMenu2fon[] = {
     {209, 101, 6, 8},
     {217, 101, 5, 8},
     {226, 101, 5, 8},
+    {115, 162, 6, 7},
     {3, 162, 8, 7},
     {14, 162, 7, 7},
     {24, 162, 7, 7},
@@ -747,7 +761,6 @@ inline constexpr Rect kInkMenu2fon[] = {
     {87, 162, 5, 7},
     {95, 162, 7, 7},
     {105, 162, 8, 7},
-    {115, 162, 6, 7},
     {125, 162, 9, 7},
     {138, 162, 8, 7},
     {148, 162, 8, 7},
@@ -765,6 +778,7 @@ inline constexpr Rect kInkMenu2fon[] = {
     {107, 174, 7, 7},
     {117, 174, 4, 7},
     {191, 174, 4, 7},
+    {208, 176, 6, 5},
     {23, 176, 6, 5},
     {41, 176, 6, 5},
     {60, 176, 5, 5},
@@ -777,7 +791,6 @@ inline constexpr Rect kInkMenu2fon[] = {
     {174, 176, 5, 5},
     {182, 176, 5, 5},
     {198, 176, 6, 5},
-    {208, 176, 6, 5},
     {217, 176, 8, 5},
     {237, 176, 7, 8},
     {246, 176, 6, 5},

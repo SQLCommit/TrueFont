@@ -101,7 +101,7 @@ inline std::vector<std::string> listPresets(const std::string& dir) {
 // Read presets over defaults; the caller preserves its enabled flag.
 inline bool loadPreset(const std::string& dir, const std::string& name, Settings& out) {
     Settings p;
-    if (!p.load(presetPath(dir, name))) return false;
+    if (!p.load(presetPath(dir, name)) || p.blankFile) return false;   // empty or damaged: not applied
     out = p;
     return true;
 }

@@ -38,7 +38,7 @@
 
 namespace {
 
-constexpr double kVersion = 1.3;
+constexpr double kVersion = 1.4;
 constexpr const char* kName = "truefont";
 
 IAshitaCore* core = nullptr;
@@ -809,6 +809,10 @@ void applySettingsWhenReady() {
              "different); saved again with their keys");
     if (r->set.migratedCells) info(fmt("settings: an older Quality Cells is Chat/Items' Sharpness now (%s); saved again with chat_sharp", tf::sharpKey(r->set.chat().sharp)));
     if (r->exists && r->set.olderFile) info("settings: a file from before the 2026-09-25 defaults: a key it lacks keeps its old default (saved with every key at the next change)");
+    if (r->exists && r->set.blankFile) {   // empty or damaged file
+        warn("settings: " + settingsPathText() + " holds no TrueFont settings (empty or damaged): the defaults are in use; the file is written at the next change");
+        chat("the settings file is empty or damaged (" + settingsPathText() + "); the defaults are in use. Change any setting to save a new file.", 0x68);
+    }
     if (!r->exists) info("settings: a new character: every font group starts switched off, on the first font in the list (tick a group's TrueFont box in /truefont)");
     if (!r->exists || r->sharedMissing || override || r->set.migratedFromV1 || r->set.migratedJp || r->set.migratedSame || r->set.migratedSplit || r->set.migratedCells ||
         !r->set.followBroken.empty())

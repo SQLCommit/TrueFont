@@ -155,6 +155,7 @@ struct Settings {
     bool migratedSplit = false;   // Migrated Nameplates/Compass from their former parent groups.
     bool migratedCells = false;   // Migrated cells to chat_sharp.
     bool olderFile = false;   // Missing keys use legacy defaults.
+    bool blankFile = false;   // No key was readable.
     std::string followBroken;    // clamp(): the ticked chains it broke ("jobs -> headings -> jobs"; "" = none); not compared
 
     // The new-player defaults (a character with no file, Reset, Reset all).
@@ -335,6 +336,7 @@ struct Settings {
     bool operator!=(const Settings& o) const { return !(*this == o); }
 
     // Missing files leave settings unchanged. Files without defaults use legacy group defaults for missing keys.
+    // A file with no keys: defaults.
     // Invalid values take the group default; all values are clamped.
     bool load(const std::string& path) {
         if (GetFileAttributesA(path.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
@@ -366,6 +368,18 @@ struct Settings {
         migratedSplit = false;
         migratedCells = false;
         olderFile = integer(kDefaultsKey, 0, 0) < kDefaultsNew;
+        blankFile = false;
+        if (olderFile) {
+            bool any = false;
+            for (const IniValue& k : Settings{}.snapshot()) if (has(k.key.c_str())) { any = true; break; }
+            if (!any) {   // empty or damaged: defaults
+                const bool on = enabled;
+                *this = Settings{};
+                enabled = on;
+                blankFile = true;
+                return true;
+            }
+        }
         if (olderFile) {   // the existing file keeps its meaning: what it lacks is the old default
             const Settings l = legacy();
             for (int i = 0; i < kGroupCount; i++) g[i] = l.g[i];

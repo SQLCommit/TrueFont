@@ -258,7 +258,7 @@ The sidebar shows the client language, active font groups, build progress and me
 | **Fonts folder** | `/ashita/config/truefont/fonts/` |
 | **Character log** | `/ashita/logs/truefont/<Name>_<id>/truefont.log` |
 
-Before login, logs use `/ashita/logs/truefont/startup_*.log`. Settings load per character; an unreadable file uses defaults and is left untouched.
+Before login, logs use `/ashita/logs/truefont/startup_*.log`. Settings load per character; an empty or damaged file uses defaults and is left as it is until you change a setting.
 
 <details>
 <summary><strong>Settings file keys</strong> — The keys in the `[truefont]` section of `settings.ini`.</summary>

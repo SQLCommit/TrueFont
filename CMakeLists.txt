@@ -13,7 +13,7 @@ add_library(freetype_trim STATIC
     ${FT_DIR}/src/pshinter/pshinter.c ${FT_DIR}/src/psnames/psnames.c ${FT_DIR}/src/smooth/smooth.c)
 target_include_directories(freetype_trim PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/freetype-config" "${FT_DIR}/include")
 target_compile_definitions(freetype_trim PRIVATE FT2_BUILD_LIBRARY _CRT_SECURE_NO_WARNINGS)
-target_compile_options(freetype_trim PRIVATE /W4 /WX /fp:precise)
+target_compile_options(freetype_trim PRIVATE /W4 /WX /fp:precise /utf-8)
 set_target_properties(freetype_trim PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # The release build only: TF_DEV is never defined here.
@@ -28,6 +28,6 @@ set_target_properties(truefont PROPERTIES
 )
 
 ashita_sdk_attach(truefont)
-target_compile_options(truefont PRIVATE /EHa /W4 /WX /fp:precise)
+target_compile_options(truefont PRIVATE /EHa /W4 /WX /fp:precise /utf-8)
 target_link_libraries(truefont PRIVATE freetype_trim user32 gdi32 ole32)
 target_link_options(truefont PRIVATE /MAP /MAPINFO:EXPORTS)
